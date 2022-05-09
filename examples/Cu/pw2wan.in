@@ -1,0 +1,6 @@
+&inputpp
+    outdir='./work'
+    prefix='pwscf',
+    seedname = 'pwscf'
+    nscf_sym = .true.
+/
