@@ -1153,7 +1153,13 @@ SUBROUTINE read_nnkp
        DO i=1, nnb
          READ(iun_nnkp,*) bvec(:,i)
        END DO
+     ELSE
+       IF (nscf_sym) THEN
+         CALL errore('read_nnkp',&
+           ' We need bvectors in nnkp for nscf_sym = .true.', 1)
+       END IF
      END IF
+
    END IF
   ! Broadcast
   CALL mp_bcast(bvec, ionode_id, world_comm)
