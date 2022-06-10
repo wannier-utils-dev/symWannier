@@ -48,11 +48,13 @@ class Wannierize:
             self.time.start_clock("sym read")
             self.sym = Sym(file_sym=prefix + "_sym.dat")
             self.time.stop_clock("sym read")
+            prefix_ibz = prefix+"_ibz"
         else:
             self.sym = None
+            prefix_ibz = prefix
 
         self.time.start_clock("mmn read")
-        mmn = Mmn(file_mmn = prefix + ".mmn", nnkp=self.nnkp, sym=self.sym)
+        mmn = Mmn(file_mmn = prefix_ibz + ".mmn", nnkp=self.nnkp, sym=self.sym)
         self.time.stop_clock("mmn read")
 
         self.mmn0 = mmn.mmn
@@ -66,9 +68,9 @@ class Wannierize:
         self.kb2k = mmn.kb2k   # index of k+b
 
         self.time.start_clock("amn read")
-        self.amn = Amn(prefix+".amn", nnkp=self.nnkp, sym=self.sym)
+        self.amn = Amn(prefix_ibz+".amn", nnkp=self.nnkp, sym=self.sym)
         self.time.stop_clock("amn read")
-        self.eig = Eig(prefix+".eig", sym=self.sym)
+        self.eig = Eig(prefix_ibz+".eig", sym=self.sym)
         self.Umat_opt = None
 
         self.file_hr_dat = prefix + "_py_hr.dat"
@@ -267,8 +269,8 @@ class Wannierize:
         #print("{:10.5f} {:10.5f} {:10.5f} {:10.5f}".format(omega, omega2, omega1, alpha))
 
         self.Umat = np.einsum("kmn, knl->kml", self.Umat, self.calc_expdw(alpha*dw), optimize=True)  # R1_Eq.(60)
-        if self.lsite_sym:
-            self.Umat = self.amn.Umat_symmetrize(self.Umat, self.Umat_opt)
+        #if self.lsite_sym:
+        #    self.Umat = self.amn.Umat_symmetrize(self.Umat, self.Umat_opt)
         self.mmn = self.update_Mmn_by_Umat(self.mmn1, self.Umat)
         omega = self.calc_omega(self.mmn)
         return omega

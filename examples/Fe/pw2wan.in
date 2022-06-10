@@ -1,0 +1,7 @@
+&inputpp 
+   outdir = './work'
+   prefix = 'pwscf'
+   seedname = 'pwscf'
+   irr_bz = .true.
+   spin_component = 'none'
+/

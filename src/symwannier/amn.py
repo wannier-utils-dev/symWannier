@@ -54,14 +54,14 @@ class Amn():
         diff = np.sum(np.abs(amn_sym - amn))/self.sym.nks
         print("  symmetrize Gk diff1 = {:15.5e}".format(diff))
         
-        if thr > 0:
-            for i in range(20):
-                amn = amn_sym
-                amn_sym = self._symmetrize_Gk_internal(amn)
-                diff = np.sum(np.abs(amn_sym - amn))/self.sym.nks
-                if diff < thr:
-                    break
-            print("  symmetrize Gk diff2 = {:15.5e}".format(diff))
+        #if thr > 0:
+        #    for i in range(20):
+        #        amn = amn_sym
+        #        amn_sym = self._symmetrize_Gk_internal(amn)
+        #        diff = np.sum(np.abs(amn_sym - amn))/self.sym.nks
+        #        if diff < thr:
+        #            break
+        #    print("  symmetrize Gk diff2 = {:15.5e}".format(diff))
         return amn_sym
 
     def _symmetrize_Gk_internal(self, amn):

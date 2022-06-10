@@ -49,14 +49,14 @@ class Mmn:
         kb2k:       index of k+b
         kpb_info:   information about k+b
         """
-        sym_mode = "Sym" in fp.readline()  # first line starts with "Sym" when symmetrized
-        if self.sym is not None and not sym_mode:
-            raise Exception("Mmn is not symmetrized")
-        if self.sym is None and sym_mode:
-            raise Exception("Mmn is symmetrized but no symmetry information.")
+        ibz = "IBZ" in fp.readline()  # first line starts with "IBZ" when prefix_ibz.mmn
+        if self.sym is not None and not ibz:
+            raise Exception("Mmn is not for IBZ")
+        if self.sym is None and ibz:
+            raise Exception("IBZ Mmn but no symmetry information.")
 
-        if sym_mode:
-            print("  Reading symmetrized mmn file")
+        if ibz:
+            print("  Reading IBZ mmn file")
         else:
             print("  Reading mmn file")
 
