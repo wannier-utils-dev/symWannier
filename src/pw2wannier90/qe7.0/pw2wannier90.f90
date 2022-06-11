@@ -337,13 +337,11 @@ PROGRAM pw2wannier90
              CALL compute_amn_with_scdm
            end if
         ELSE
-           IF (.not. irr_bz) THEN
-              WRITE(stdout,*) ' --------------------------'
-              WRITE(stdout,*) ' *** Compute  A projections'
-              WRITE(stdout,*) ' --------------------------'
-              WRITE(stdout,*)
-              CALL compute_amn
-           ENDIF
+           WRITE(stdout,*) ' --------------------------'
+           WRITE(stdout,*) ' *** Compute  A projections'
+           WRITE(stdout,*) ' --------------------------'
+           WRITE(stdout,*)
+           CALL compute_amn
         ENDIF
         WRITE(stdout,*)
      ELSE
@@ -359,8 +357,6 @@ PROGRAM pw2wannier90
         WRITE(stdout,*)
         IF(irr_bz) THEN
            CALL compute_mmn_ibz
-           ! calcuate Amn after Mmn
-           CALL compute_amn
         ELSE
            CALL compute_mmn
         ENDIF

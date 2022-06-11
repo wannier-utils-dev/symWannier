@@ -1,0 +1,33 @@
+ &control
+    calculation = 'nscf'
+    prefix='pwscf',
+    pseudo_dir = '~/PWSCF/pseudo_psl031/',
+    outdir='./work',
+	disk_io='low'
+	wf_collect=.true.
+ /
+ &system    
+    ibrav=  -3,
+	celldm(1) = 5.4,
+	nat=  1,
+	ntyp= 1,
+    ecutwfc = 64.0, 
+    ecutrho = 782.0, 
+	occupations = 'smearing'
+	smearing = 'm-p'
+	degauss = 0.02
+    nbnd = 70
+	lspinorb = .true.
+	noncolin = .true.
+	starting_magnetization(1) = 1.0
+ /
+ &electrons
+    conv_thr=1e-8
+	diago_full_acc=.true.
+ /
+ATOMIC_SPECIES
+Fe  1   Fe.rel-pbe-spn-kjpaw_psl.0.2.1.UPF
+ATOMIC_POSITIONS {crystal}
+Fe   0  0  0
+K_POINTS {automatic}
+ 8 8 8 0 0 0

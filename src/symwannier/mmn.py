@@ -130,11 +130,8 @@ class Mmn:
                     #   from g0^-1 e^{-i b_f r} => e^{i b_i r} g0^-1 x e^{-i b_i T}
                     # e^{i (k_i+b_i) Tdiff}
                     #   from h = g0^-1(ki+bi) g0^-1(kf) g0(kf+bf)
-                    #kbi_eq = self.sym.full_kpoints[ikbi_eq]
                     kbi_eq = self.sym.irr_kpoints[ikbi_eq]
-                    #tdiff = np.matmul(tdiff, self.sym.s[isym2,:,:]) - self.sym.ft[isym2,:]
                     arg1 = - np.dot(bi, self.sym.ft[isym1,:])
-                    #arg2 = np.dot(kbi_eq, tdiff - self.sym.ft[isym2,:])
                     arg2 = - np.dot(kbi_eq, tdiff)
                     phase = np.exp( 2j*np.pi* (arg1 + arg2) )
                     mmn[ikf,ibf,:,:] *= phase
