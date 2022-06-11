@@ -819,7 +819,7 @@ SUBROUTINE read_nnkp
   USE io_global, ONLY : stdout, ionode, ionode_id
   USE kinds,     ONLY: DP
   USE constants, ONLY : eps6, tpi, bohr => BOHR_RADIUS_ANGS
-  USE cell_base, ONLY : at, bg, alat, tpiba
+  USE cell_base, ONLY : at, bg, alat
   USE gvect,     ONLY : g, gg
   USE klist,     ONLY : nkstot, xk
   USE mp,        ONLY : mp_bcast, mp_sum
