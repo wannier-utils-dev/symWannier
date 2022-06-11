@@ -20,7 +20,7 @@ In the NSCF calculation, k points should be automatically generated as
 K_POINTS {automatic}
 8 8 8 0 0 0
 ```
-Prepare prefix.win and generate prefix.nnkp. Uniform k points in prefix.win should be consistent with NSCF calc (-0.5 <= kx, ky, kz < 0.5). 
+Prepare prefix.win and generate prefix.nnkp. Uniform k points in prefix.win have to be consistent with NSCF calc (-0.5 <= kx, ky, kz < 0.5). 
 ```
 wannier90.x -pp prefix
 ```
@@ -28,15 +28,17 @@ Run modified pw2wannier90.x with ```irr_bz = .true.``` to compute prefix_ibz.mmn
 ```
 pw2wannier90.x < pw2wan.in
 ```
-Calculate Mmn, Amn and Eig in the full BZ.
+Calculate Mmn, Amn and Eig in the full BZ using ```write_full_data.py```.
 ```
-python write_full_data.py 
+SYMWANNIERDIR=path/to/symWannier/src
+export PYTHONPATH=$SYMWANNIERDIR
+python $SYMWANNIERDIR/symwannier/write_full_data.py 
 ```
 Run wannier90 as usual.
 ```
 wannier90.x prefix
 ```
 
-There are sample input files and a script file, test.sh, in examples/Cu and examples/Fe.
+There are sample input and script files, in examples/Cu and examples/Fe.
 
 
