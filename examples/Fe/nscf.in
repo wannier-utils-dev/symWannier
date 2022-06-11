@@ -1,7 +1,7 @@
  &control
     calculation = 'nscf'
     prefix='pwscf',
-    pseudo_dir = '~/PWSCF/pseudo_psl031/',
+    pseudo_dir = './',
     outdir='./work',
 	disk_io='low'
 	wf_collect=.true.
