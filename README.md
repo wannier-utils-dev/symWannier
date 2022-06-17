@@ -20,11 +20,11 @@ In the NSCF calculation, k points should be automatically generated as
 K_POINTS {automatic}
 8 8 8 0 0 0
 ```
-Prepare prefix.win and generate prefix.nnkp. Uniform k points in prefix.win have to be consistent with NSCF calc (-0.5 <= kx, ky, kz < 0.5). 
+Prepare prefix.win and generate prefix.nnkp. Uniform k points in prefix.win have to be consistent with NSCF calc (-0.5 <= kx, ky, kz < 0.5). Please check the k points in NSCF calc without symmetry (nosym=.true., noinv=.true., verbosity='high').
 ```
 wannier90.x -pp prefix
 ```
-Run modified pw2wannier90.x with ```irr_bz = .true.``` to compute prefix_ibz.mmn, prefix_ibz.amn, prefix_ibz.eig. Symmetry infomation is stored in prefix_sym.dat.
+Run modified pw2wannier90.x with ```irr_bz = .true.``` to compute prefix.mmni, prefix.amni, prefix.eigi. Symmetry infomation is stored in prefix_sym.dat.
 ```
 pw2wannier90.x < pw2wan.in
 ```

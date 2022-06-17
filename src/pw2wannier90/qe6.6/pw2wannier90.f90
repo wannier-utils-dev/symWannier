@@ -256,6 +256,10 @@ PROGRAM pw2wannier90
   ENDIF
   IF (scdm_sigma <= 0._dp) &
     call errore('pw2wannier90','Sigma in the SCDM method must be positive.')
+  IF (irr_bz .and. scdm_proj) CALL errore('pw2wannier90', &
+       "Irreducible BZ and SCDM not implemented", 1)
+  IF (irr_bz .and. (write_uHu .or. write_uIu)) CALL errore('pw2wannier90', &
+       "Irreducible BZ and compute_orb not implemented", 1)
   !
   SELECT CASE ( trim( spin_component ) )
   CASE ( 'up' )
@@ -2440,7 +2444,7 @@ SUBROUTINE compute_mmn_ibz
    CALL date_and_tim( cdate, ctime )
    header='IBZ Mmn created on '//cdate//' at '//ctime
    IF (ionode) THEN
-      OPEN (unit=iun_mmn, file=trim(seedname)//"_ibz.mmn",form='formatted')
+      OPEN (unit=iun_mmn, file=trim(seedname)//".mmni",form='formatted')
       WRITE (iun_mmn,*) header
       WRITE (iun_mmn,*) nbnd-nexband, iknum, nnb
    ENDIF
@@ -4158,7 +4162,7 @@ SUBROUTINE compute_amn
       iun_amn = find_free_unit()
       IF (ionode) THEN
          IF (irr_bz) THEN
-            OPEN (unit=iun_amn, file=trim(seedname)//"_ibz.amn",form='formatted')
+            OPEN (unit=iun_amn, file=trim(seedname)//".amni",form='formatted')
          ELSE
             OPEN (unit=iun_amn, file=trim(seedname)//".amn",form='formatted')
          ENDIF
@@ -5279,7 +5283,7 @@ SUBROUTINE write_band
       iun_band = find_free_unit()
       IF (ionode) THEN
          IF (irr_bz) THEN
-            OPEN (unit=iun_band, file=trim(seedname)//"_ibz.eig",form='formatted')
+            OPEN (unit=iun_band, file=trim(seedname)//".eigi",form='formatted')
          ELSE
             OPEN (unit=iun_band, file=trim(seedname)//".eig",form='formatted')
          ENDIF
