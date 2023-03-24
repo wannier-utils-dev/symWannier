@@ -917,7 +917,7 @@ SUBROUTINE read_nnkp
            &//trim(seedname)//'.nnkp', 1 )
      endif
      READ(iun_nnkp,*) numk
-     IF(irr_bz == .true.) THEN
+     IF(irr_bz) THEN
         ALLOCATE(xkc_full(3,numk))
         DO i=1,numk
            READ(iun_nnkp,*) xkc_full(:,i)
