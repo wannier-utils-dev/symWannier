@@ -32,9 +32,7 @@ class Mmn:
                 k = self.sym.full_kpoints[ik]
                 b = self.nnkp.bvec_crys[ib]
                 ikb = self.sym.search_ik_full(k+b)
-                g = k - self.sym.full_kpoints[ikb]
-                if np.allclose(b, np.round(b)):
-                    g += np.round(b)
+                g = k + b - self.sym.full_kpoints[ikb]
                 fp.write("{0}  {1}  {2[0]}  {2[1]}  {2[2]}\n".format(ik+1, ikb+1, np.round(g).astype("int")))
                 for m, n in itertools.product( range(self.num_bands), repeat=2 ):
                     fp.write("{0.real:18.12f}  {0.imag:18.12f}\n".format(self.mmn[ik,ib,n,m]))
