@@ -46,7 +46,7 @@ class Wannierize:
 
         if self.lsym:
             self.time.start_clock("sym read")
-            self.sym = Sym(file_sym=prefix + "_sym.dat")
+            self.sym = Sym(file_sym=prefix + "_sym.dat", nnkp=self.nnkp)
             self.time.stop_clock("sym read")
             ext = 'i'
         else:

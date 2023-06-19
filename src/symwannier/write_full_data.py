@@ -10,8 +10,8 @@ from symwannier.eig import Eig
 
 prefix = sys.argv[1]
 
-sym = Sym(file_sym=prefix+"_sym.dat")
 nnkp = Nnkp(file_nnkp=prefix+".nnkp")
+sym = Sym(file_sym=prefix+"_sym.dat", nnkp=nnkp)
 
 # Eig
 print(" {0:s}.eigi => {0:s}.eig".format(prefix))
