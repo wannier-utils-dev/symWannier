@@ -46,7 +46,7 @@ class Wannierize:
 
         if self.lsym:
             self.time.start_clock("sym read")
-            self.sym = Sym(file_sym=prefix + "_sym.dat", nnkp=self.nnkp)
+            self.sym = Sym(file_sym=prefix + ".isym", nnkp=self.nnkp)
             self.time.stop_clock("sym read")
             ext = 'i'
         else:
@@ -54,7 +54,7 @@ class Wannierize:
             ext = ''
 
         self.time.start_clock("mmn read")
-        mmn = Mmn(file_mmn = prefix+".mmn"+ext, nnkp=self.nnkp, sym=self.sym)
+        mmn = Mmn(file_mmn = prefix+"." + ext + "mmn", nnkp=self.nnkp, sym=self.sym)
         self.time.stop_clock("mmn read")
 
         self.mmn0 = mmn.mmn
@@ -68,9 +68,9 @@ class Wannierize:
         self.kb2k = mmn.kb2k   # index of k+b
 
         self.time.start_clock("amn read")
-        self.amn = Amn(prefix+".amn"+ext, nnkp=self.nnkp, sym=self.sym)
+        self.amn = Amn(prefix+"." + ext + "amn", nnkp=self.nnkp, sym=self.sym)
         self.time.stop_clock("amn read")
-        self.eig = Eig(prefix+".eig"+ext, sym=self.sym)
+        self.eig = Eig(prefix+"." + ext + "eig", sym=self.sym)
         self.Umat_opt = None
 
         self.file_hr_dat = prefix + "_py_hr.dat"

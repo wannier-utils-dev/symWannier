@@ -22,13 +22,12 @@ class Sym:
         print("  Reading {}".format(file_sym))
         with open(file_sym) as fp:
             fp.readline()  # skip first line
-            self.spinors = "spinors" in fp.readline()  # second line: check spinor
-
+            nsym, spinors = [int(x) for x in fp.readline().split()]  # second line
+            self.spinors = (spinors == 1)
+            print("  num of symmetry ops.: {}".format(nsym))
             #
             # read symmetry operation
             #
-            nsym = int( fp.readline() )
-            print("  num of symmetry ops.: {}".format(nsym))
             s = np.zeros([nsym,3,3], dtype=int)
             ft = np.zeros([nsym,3])
             t_rev = np.zeros([nsym], dtype=int)
@@ -49,64 +48,48 @@ class Sym:
                     u_spin[isym,0,0] = 1
                     u_spin[isym,1,1] = 1
                 invs[isym] = int( fp.readline() ) - 1   # invs starts from 0
-            time_reversal = bool( fp.readline() )
-
             #
             # read k-points and setup k-space
             #
             fp.readline()  # skip blank line
             fp.readline()  # skip "K points"
-            nk_grid = [ int(x) for x in fp.readline().split() ]
-            nk_shift = [ int(x) for x in fp.readline().split() ]
             nks = int( fp.readline() )
             klist = np.zeros([nks,3])
             for ik in range(nks):
                 klist[ik,:] = [ float(x) for x in fp.readline().split() ]
             print("  num of irr. k-points: {}".format(nks))
-
             #
             # read Representation matrix
             #
             fp.readline()  # skip blank line
             fp.readline()  # skip "Representation ..."
-            nbnd = int( fp.readline().split()[0] )
+            nbnd, nblocks = [ int(x) for x in fp.readline().split() ]
             repmat = np.zeros([nks, nsym, nbnd, nbnd], dtype=complex)
-            line = fp.readline()
-            while len(line) > 2:
-                ik, isym = [ int(x) for x in line.split() ]
-                ch = [ float(x) for x in fp.readline().split() ]
-                #if (ch[0] - round(ch[0])) > 1e-5 or ch[1] > 1e-5:
-                #    print("Warning: character is not integer!  {} + {}i".format(ch[0], ch[1]))
-                while True:
-                    line = fp.readline()
-                    d = line.split()
-                    if len(d) < 3: break
+            for i in range(nblocks):
+                ik, isym, nlines = [ int(x) for x in fp.readline().split() ]
+                for j in range(nlines):
+                    d = fp.readline().split()
                     repmat[ ik-1, isym-1, int(d[0])-1, int(d[1])-1 ] = float(d[2]) + 1j * float(d[3])
-
             #
             # read Rotation matrix
             #
+            fp.readline()   # skip ""
             fp.readline()   # skip "Rotation ..."
             num_wann = int(fp.readline())
             rotmat = np.zeros([nsym, num_wann, num_wann], dtype=complex)
-            line = fp.readline()
-            while len(line) > 2:
-                isym = int(line)
-                while True:
-                    line = fp.readline()
-                    d = line.split()
-                    if len(d) < 3: break
-                    rotmat[ isym-1, int(d[0])-1, int(d[1])-1 ] = float(d[2]) + 1j * float(d[3])
+            for isym in range(nsym):
+                isym_in, nlines = [ int(x) for x in fp.readline().split() ]
+                assert isym_in == isym+1
+                for i in range(nlines):
+                    d = fp.readline().split()
+                    rotmat[ isym, int(d[0])-1, int(d[1])-1 ] = float(d[2]) + 1j * float(d[3])
 
             self.nsym = nsym
             self.s = s
             self.ft = ft
             self.t_rev = t_rev
             self.u_spin = u_spin
-            self.time_reversal = time_reversal
             self.invs = invs
-            self.nk_grid = nk_grid
-            self.nk_shift = nk_shift
             self.nks = nks
             self.irr_kpoints = klist
             self.nbnd = nbnd
@@ -125,15 +108,8 @@ class Sym:
         equiv_sym[ik] = isym
         """
         # full mesh
-        #kx = np.array([ float(i + 0.5*self.nk_shift[0])/self.nk_grid[0] for i in range(self.nk_grid[0]) ])
-        #kx = np.where(kx < 0.5, kx, kx-1)
-        #ky = np.array([ float(i + 0.5*self.nk_shift[1])/self.nk_grid[1] for i in range(self.nk_grid[1]) ])
-        #ky = np.where(ky < 0.5, ky, ky-1)
-        #kz = np.array([ float(i + 0.5*self.nk_shift[2])/self.nk_grid[2] for i in range(self.nk_grid[2]) ])
-        #kz = np.where(kz < 0.5, kz, kz-1)
-        #full_klist = np.array(list(itertools.product(kx, ky, kz)))
         full_klist = nnkp.kpoints
-        nkf = np.product(self.nk_grid)
+        nkf = len(full_klist)
         equiv = - np.ones( [ nkf ], dtype=int )
         equiv_sym = np.zeros( [ nkf ], dtype=int )
         iks2ik = - np.ones([ len(self.irr_kpoints) ], dtype=int )
