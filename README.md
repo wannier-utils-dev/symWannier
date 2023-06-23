@@ -4,9 +4,10 @@ A collection of codes to construct Wannier functions using crystal symmetry.
 
 ## Installation
 
-One needs to modify pw2wannier90.
+First, pw2wannier90 should be modified.
 
 Copy src/pw2wannier90/qe7.0/pw2wannier90.f90 to your QE directory and compile it.
+Alternatively, you can also use the develop version of QE in Gitlab (https://gitlab.com/QEF/q-e).
 
 ## How to use
 
@@ -20,6 +21,7 @@ In the NSCF calculation, k points should be automatically generated as
 K_POINTS {automatic}
 8 8 8 0 0 0
 ```
+
 Prepare prefix.win and generate prefix.nnkp.
 ```
 wannier90.x -pp prefix

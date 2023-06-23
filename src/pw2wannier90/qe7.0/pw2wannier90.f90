@@ -467,7 +467,7 @@ PROGRAM pw2wannier90
      if(write_dmn  )  CALL print_clock( 'compute_dmn'  )!YN:
      IF(write_amn  )  CALL print_clock( 'compute_amn'  )
      IF(write_mmn  )  CALL print_clock( 'compute_mmn'  )
-     IF(irr_bz  )     CALL print_clock( 'compute_mmn_ibz'  )
+     IF(irr_bz  )     CALL print_clock( 'compute_immn'  )
      IF(write_sHu .OR. write_sIu) CALL print_clock( 'compute_shc'  )
      IF(write_unk  )  CALL print_clock( 'write_unk'    )
      IF(write_unkg )  CALL print_clock( 'write_parity' )
@@ -922,9 +922,9 @@ SUBROUTINE read_nnkp
         DO i=1,numk
            READ(iun_nnkp,*) xkc_full(:,i)
         END DO
-        IF(any(abs(xkc_full(:,:)) > 0.5)) THEN
-           CALL errore( 'pw2wannier90', 'kpoints should be -0.5 <= k < 0.5', 1 )
-        ENDIF
+        !IF(any(abs(xkc_full(:,:)) > 0.5)) THEN
+        !   CALL errore( 'pw2wannier90', 'kpoints should be -0.5 <= k < 0.5', 1 )
+        !ENDIF
      ELSE
         IF(numk/=iknum) THEN
            WRITE(stdout,*)  ' Something wrong! '
@@ -2465,7 +2465,7 @@ SUBROUTINE compute_mmn_ibz
    INTEGER                  :: nsym2, s2(3,3,96), invs2(96), t_rev2(96), t_rev_spin(2,2)
    REAL(DP)                 :: sr2(3,3,96), ft2(3,96)
    !
-   CALL start_clock( 'compute_mmn_ibz' )
+   CALL start_clock( 'compute_immn' )
    !
    CALL setup_symm_timerevarsal()
    !
@@ -2478,7 +2478,7 @@ SUBROUTINE compute_mmn_ibz
    CALL date_and_tim( cdate, ctime )
    header='IBZ Mmn created on '//cdate//' at '//ctime
    IF (ionode) THEN
-      OPEN (unit=iun_mmn, file=trim(seedname)//".mmni",form='formatted')
+      OPEN (unit=iun_mmn, file=trim(seedname)//".immn",form='formatted')
       WRITE (iun_mmn,*) header
       WRITE (iun_mmn,*) nbnd-nexband, iknum, nnb
    ENDIF
@@ -2548,10 +2548,11 @@ SUBROUTINE compute_mmn_ibz
                ELSE
                   mmn = zdotc (npw, evc(1,m),1,gpsi(1,n),1)
                END IF
-               CALL mp_sum(mmn, intra_pool_comm)
+               !CALL mp_sum(mmn, intra_pool_comm)
                Mkb(m,n) = mmn
             END DO
          END DO
+         CALL mp_sum(Mkb, intra_pool_comm)
          !
          ! USPP/PAW part
          !
@@ -2633,7 +2634,7 @@ SUBROUTINE compute_mmn_ibz
    WRITE(stdout,'(/)')
    WRITE(stdout,*) ' IBZ MMN calculated'
    !
-   CALL stop_clock( 'compute_mmn_ibz' )
+   CALL stop_clock( 'compute_immn' )
    !
    CONTAINS
    !
@@ -2676,7 +2677,7 @@ SUBROUTINE compute_mmn_ibz
       !
       INTEGER, EXTERNAL        :: find_free_unit
       !
-      INTEGER                  :: i, m, n, iun_sym, mi, ni, a
+      INTEGER                  :: i, m, n, iun_sym, mi, ni, a, ncount
       CHARACTER (len=9)        :: cdate,ctime
       REAL(DP)                 :: srt(3,3)
       COMPLEX(DP)              :: tr, u_spin(2,2)
@@ -2693,17 +2694,16 @@ SUBROUTINE compute_mmn_ibz
       iun_sym = find_free_unit()
       CALL date_and_tim( cdate, ctime )
       IF (ionode) THEN
-         OPEN(unit=iun_sym, file=trim(seedname)//"_sym.dat", form='formatted')
+         OPEN(unit=iun_sym, file=trim(seedname)//".isym", form='formatted')
          !
          ! save symmetry operation
          !
          WRITE (iun_sym,*) 'Symmetry information created on  '//cdate//' at '//ctime
          IF (noncolin) THEN
-            WRITE (iun_sym,*) 'Symmetry operations with spinors'
+            WRITE (iun_sym,*) nsym2, 1
          ELSE
-            WRITE (iun_sym,*) 'Symmetry operations'
+            WRITE (iun_sym,*) nsym2, 0
          END IF
-         WRITE (iun_sym,*) nsym2
          DO i=1, nsym2
             IF (i > nsym) THEN
                WRITE (iun_sym,'(i3,":  ",a, "+T")') i, sname(i-nsym)
@@ -2725,12 +2725,9 @@ SUBROUTINE compute_mmn_ibz
             !
             write(iun_sym,*) invs2(i)
          END DO
-         write(iun_sym,*) time_reversal
 
          write(iun_sym, *)
          WRITE (iun_sym,*) 'K points'
-         write(iun_sym,'(3i10)') nk1, nk2, nk3
-         write(iun_sym,'(3i10)') k1, k2, k3
          write(iun_sym,'(3i10)') iknum
          DO i=1, iknum
            write(iun_sym, '(3f16.10)') xkc(:,i)
@@ -2740,16 +2737,23 @@ SUBROUTINE compute_mmn_ibz
          !
          write(iun_sym, *)
          WRITE (iun_sym,*) 'Representation matrix of G_k'
-         WRITE (iun_sym,'(3i10)') nbnd - nexband
+         ncount = 0
+         DO ik=1, nkstot
+            DO isym=1, nsym2
+               IF (.not. all(repmat(:,:,isym,ik) == 0)) ncount = ncount + 1
+            END DO
+         END DO
+         WRITE (iun_sym,'(3i10)') nbnd - nexband, ncount
          DO ik=1, nkstot
             DO isym=1, nsym2
                IF (all(repmat(:,:,isym,ik) == 0)) CYCLE
-               WRITE(iun_sym, *) ik, isym
-               tr = 0
-               DO m=1, nbnd
-                  tr = tr + repmat(m,m,isym,ik)
-               END DO
-               WRITE(iun_sym, '(2f20.10)') real(tr), aimag(tr)
+               ncount = count(repmat(:,:,isym,ik) /= 0)
+               WRITE(iun_sym, *) ik, isym, ncount
+               !tr = 0
+               !DO m=1, nbnd
+               !   tr = tr + repmat(m,m,isym,ik)
+               !END DO
+               !WRITE(iun_sym, '(2f20.10)') real(tr), aimag(tr)
                mi = 0
                DO m=1, nbnd
                   IF (excluded_band(m)) CYCLE
@@ -2772,7 +2776,8 @@ SUBROUTINE compute_mmn_ibz
          WRITE(iun_sym,*) n_wannier
          DO isym=1, nsym2
             IF (all(abs(rotmat(:,:,isym)) < 1e-10)) CYCLE
-            WRITE(iun_sym, *) isym
+            ncount = count(abs(rotmat(:,:,isym)) >= 1e-10)
+            WRITE(iun_sym, *) isym, ncount
             DO m=1, n_wannier
                DO n=1, n_wannier
                   IF (abs(rotmat(m,n,isym)) < 1e-10) CYCLE
@@ -4487,7 +4492,7 @@ SUBROUTINE compute_amn
       iun_amn = find_free_unit()
       IF (ionode) THEN
          IF (irr_bz) THEN
-            OPEN (unit=iun_amn, file=trim(seedname)//".amni",form='formatted')
+            OPEN (unit=iun_amn, file=trim(seedname)//".iamn",form='formatted')
          ELSE
             OPEN (unit=iun_amn, file=trim(seedname)//".amn",form='formatted')
          ENDIF
@@ -5608,7 +5613,7 @@ SUBROUTINE write_band
       iun_band = find_free_unit()
       IF (ionode) THEN
          IF (irr_bz) THEN
-            OPEN (unit=iun_band, file=trim(seedname)//".eigi",form='formatted')
+            OPEN (unit=iun_band, file=trim(seedname)//".ieig",form='formatted')
          ELSE
             OPEN (unit=iun_band, file=trim(seedname)//".eig",form='formatted')
          ENDIF
