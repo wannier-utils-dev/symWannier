@@ -131,6 +131,13 @@ class Mmn:
                     kbi_eq = self.sym.irr_kpoints[ikbi_eq]
                     arg1 = - np.dot(bi, self.sym.ft[isym1,:])
                     arg2 = - np.dot(kbi_eq, tdiff)
+                    if self.sym.t_rev[isym2] == 1:
+                        arg2 *= -1
+                    if self.sym.t_rev[isym1] == 1:
+                        arg1 *= -1
+                        arg2 *= -1
+                    if self.sym.t_rev[isym] == 1:
+                        arg2 *= -1
                     phase = np.exp( 2j*np.pi* (arg1 + arg2) )
                     mmn[ikf,ibf,:,:] *= phase
 
