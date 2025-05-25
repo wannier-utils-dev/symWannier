@@ -398,7 +398,7 @@ class Wannierize:
         self.irvec = mp_list[ind]
         self.ndegen = ndeg[ind]
         # check sum rule
-        assert np.sum(1/self.ndegen) - np.product(mp_grid) < 1e-8, "error in finding Wigner-Seitz points"
+        assert np.sum(1/self.ndegen) - np.prod(mp_grid) < 1e-8, "error in finding Wigner-Seitz points"
 
     def write_hr(self):
         self.calc_irvec()
