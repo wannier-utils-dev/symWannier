@@ -4,18 +4,19 @@
  Python version of wannier90
  Maximally localized Wannier functions code
 
- Usage: wannierize.py [-s] [-S] <prefix>
+ Usage:
+   symwannier wannierize [-s] [-S] <prefix>
 
  Options:
-   -s    use symmetry ( prefix_sym.dat is required. )
-   -S    use symmetry + site symmetry ( prefix_sym.dat is required. )
+   -s    use symmetry ( prefix.isym is required. )
+   -S    use symmetry + site symmetry ( prefix.isym is required. )
 
  Reference: 
- N. Marzari and D. Vanderbilt PRB 56 12847 (1997):  Referred as R1
- I. Souza, N. Marzari and D. Vanderbilt PRB 65 035109 (2001): R2
+   R1. N. Marzari and D. Vanderbilt PRB 56 12847 (1997)
+   R2. I. Souza, N. Marzari and D. Vanderbilt PRB 65 035109 (2001)
+   R3. T. Koretsune Comp. Phys. Comm. 285 108645 (2023)
 
-
- copyright (C) 2021-2022  Takashi Koretsune
+ copyright (C) 2021-2025  Takashi Koretsune
 
 """
 
@@ -471,10 +472,18 @@ class Wannierize:
                     fp.write(line + "\n")
 
 
-if __name__ == '__main__':
-    args = docopt(__doc__)
+def main(argv=None, for_cli=False):
+    doc = __doc__
+    if not for_cli:
+        doc = doc.replace("symmwanier wannierize", "python wannierize")
+
+    args = docopt(doc, argv=argv)
 
     prefix = args["<prefix>"]
 
     wann = Wannierize(prefix=prefix, lsym=args["-s"], lsite_sym=args["-S"])
     wann.run()
+
+
+if __name__ == '__main__':
+    main()

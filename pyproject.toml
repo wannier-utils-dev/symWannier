@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "symWannier"
 version = "1.1.0"
 description = "A python package for computing symmetry adapted Wannier functions with irreducible BZ"
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
 {name = "Takashi Koretsune", email = "koretsune@cmpt.phys.tohoku.ac.jp"}
 ]
@@ -21,8 +21,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 
-[tool.setuptools.package-dir]
-"" = "src"
-
 [tool.setuptools]
-packages = ["symwannier"]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["symwannier"]
+
+[project.scripts]
+symwannier = "symwannier.cli:main"
