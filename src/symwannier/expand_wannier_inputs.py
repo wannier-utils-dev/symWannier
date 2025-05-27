@@ -2,10 +2,17 @@
 """
  Expand Wannier input files using symmetry information:
  prefix.immn, prefix.iamn, prefix.ieig, prefix.isym => prefix.mmn, prefix.amn, prefix.eig
+"""
 
- Usage:
-   symwannier expand <prefix>
+DESCRIPTION = __doc__.strip()
+USAGE_CLI = """
+Usage:
+  expand <prefix>
+"""
 
+USAGE_DIRECT = """
+Usage:
+  expand_wannier_inputs.py <prefix>
 """
 
 import sys
@@ -18,9 +25,8 @@ from symwannier.mmn import Mmn
 from symwannier.eig import Eig
 
 def main(argv=None, for_cli=False):
-    doc = __doc__
-    if not for_cli:
-        doc = doc.replace("symwannier expand", "python expand_wannier_inputs.py")
+    usage = USAGE_CLI if for_cli else USAGE_DIRECT
+    doc = f"{DESCRIPTION}\n{usage}"
 
     args = docopt(doc, argv=argv)
 

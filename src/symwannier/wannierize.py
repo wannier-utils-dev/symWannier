@@ -1,23 +1,26 @@
 #!/usr/bin/env python
 """
-
- Python version of wannier90
- Maximally localized Wannier functions code
-
- Usage:
-   symwannier wannierize [-s] [-S] <prefix>
-
- Options:
-   -s    use symmetry ( prefix.isym is required. )
-   -S    use symmetry + site symmetry ( prefix.isym is required. )
+ Compute maximally localized Wannier functions using symmetry information.
 
  Reference: 
    R1. N. Marzari and D. Vanderbilt PRB 56 12847 (1997)
    R2. I. Souza, N. Marzari and D. Vanderbilt PRB 65 035109 (2001)
    R3. T. Koretsune Comp. Phys. Comm. 285 108645 (2023)
+"""
 
- copyright (C) 2021-2025  Takashi Koretsune
-
+DESCRIPTION = __doc__.strip()
+USAGE_CLI = """
+ Usage:
+   wannierize [-s] [-S] <prefix>
+"""
+USAGE_DIRECT = """
+ Usage:
+   wannierize.py [-s] [-S] <prefix>
+"""
+OPTIONS = """
+ Options:
+   -s    use symmetry ( prefix.isym is required. )
+   -S    use symmetry + site symmetry ( prefix.isym is required. )
 """
 
 import numpy as np
@@ -473,9 +476,8 @@ class Wannierize:
 
 
 def main(argv=None, for_cli=False):
-    doc = __doc__
-    if not for_cli:
-        doc = doc.replace("symmwanier wannierize", "python wannierize")
+    usage = USAGE_CLI if for_cli else USAGE_DIRECT
+    doc = f"{DESCRIPTION}\n{usage}{OPTIONS}"
 
     args = docopt(doc, argv=argv)
 
