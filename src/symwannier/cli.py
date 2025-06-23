@@ -1,29 +1,29 @@
 #!/usr/bin/env python
 """
 symwannier - Symmetry-adapted Wannier tools
-
-Usage:
-  symwannier expand [<args>...]
-  symwannier wannierize [<args>...]
-  symwannier (-h | --help)
-
-Options:
-  -h --help     Show this help message and exit.
-
-Run 'symwannier <command> --help' for more information on a command.
 """
 
-from docopt import docopt
+import argparse
 import sys
 from symwannier import expand_wannier_inputs, wannierize
 
 def main():
-    args = docopt(__doc__, argv=sys.argv[1:], options_first=True)
-    cmd_args = sys.argv[2:]
+    parser = argparse.ArgumentParser(
+        prog="symwannier",
+        description="symwannier - Symmetry-adapted Wannier tools",
+    )
 
-    if args["expand"]:
-        expand_wannier_inputs.main(cmd_args, for_cli=True)
-    elif args["wannierize"]:
-        wannierize.main(cmd_args, for_cli=True)
+    subparsers = parser.add_subparsers(dest="command", help="Subcommands")
+
+    expand_parser = subparsers.add_parser("expand", help="Expand input files using symmetry information", add_help=False)
+
+    wannier_parser = subparsers.add_parser("wannierize", help="Perform Wannierization using symmetry inputs", add_help=False)
+
+    args, remainder = parser.parse_known_args()
+
+    if args.command == "expand":
+        expand_wannier_inputs.main(remainder, for_cli=True)
+    elif args.command == "wannierize":
+        wannierize.main(remainder, for_cli=True)
     else:
-        print(__doc__)
+        parser.print_help()

@@ -8,27 +8,13 @@
    R3. T. Koretsune Comp. Phys. Comm. 285 108645 (2023)
 """
 
-DESCRIPTION = __doc__.strip()
-USAGE_CLI = """
- Usage:
-   wannierize [-s] [-S] <prefix>
-"""
-USAGE_DIRECT = """
- Usage:
-   wannierize.py [-s] [-S] <prefix>
-"""
-OPTIONS = """
- Options:
-   -s    use symmetry ( prefix.isym is required. )
-   -S    use symmetry + site symmetry ( prefix.isym is required. )
-"""
-
 import numpy as np
 import scipy.linalg
 import itertools
 import textwrap
 import datetime
-from docopt import docopt
+import argparse
+import sys
 
 from symwannier.win import Win
 from symwannier.mmn import Mmn
@@ -39,12 +25,13 @@ from symwannier.nnkp import Nnkp
 from symwannier.timedata import TimeData
 
 class Wannierize:
-    def __init__(self, prefix, lsym=False, lsite_sym=False):
+    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False):
         self.time = TimeData()
         self.win = Win(prefix)
         self.nnkp = Nnkp(prefix + ".nnkp")
         self.lsym = lsym
         self.lsite_sym = lsite_sym
+        self.prec = prec
         if self.lsite_sym:
             self.lsym = True
 
@@ -421,7 +408,10 @@ class Wannierize:
                 for i, j in itertools.product( range(self.num_wann), repeat=2 ):
                     line = "".join( "{:5d}".format(x) for x in self.irvec[irpts,:] )
                     line += "{:5d}{:5d}".format(j+1, i+1)
-                    line += "{:12.6f}{:12.6f}".format(ham_r[j,i,irpts].real, ham_r[j,i,irpts].imag)
+                    if self.prec:
+                        line += "{:20.15f}{:20.15f}".format(ham_r[j,i,irpts].real, ham_r[j,i,irpts].imag)
+                    else:
+                        line += "{:12.6f}{:12.6f}".format(ham_r[j,i,irpts].real, ham_r[j,i,irpts].imag)
                     #line += "{:15.10f}{:15.10f}".format(ham_r[i,j,irpts].real, ham_r[i,j,irpts].imag)
                     fp.write(line + "\n")
 
@@ -457,7 +447,10 @@ class Wannierize:
                 fp.write("\n")
                 for i, j in itertools.product( range(self.num_wann), repeat=2 ):
                     line = "{:5d}{:5d}  ".format(j+1, i+1)
-                    line += " {:15.8e} {:15.8e}".format(ham_r[j,i,irpts].real, ham_r[j,i,irpts].imag)
+                    if self.prec:
+                        line += " {:22.15e} {:22.15e}".format(ham_r[j,i,irpts].real, ham_r[j,i,irpts].imag)
+                    else:
+                        line += " {:15.8e} {:15.8e}".format(ham_r[j,i,irpts].real, ham_r[j,i,irpts].imag)
                     fp.write(line + "\n")
             #
             # write <0n|r|Rm>
@@ -476,14 +469,41 @@ class Wannierize:
 
 
 def main(argv=None, for_cli=False):
-    usage = USAGE_CLI if for_cli else USAGE_DIRECT
-    doc = f"{DESCRIPTION}\n{usage}{OPTIONS}"
+    if argv is None:
+        argv = sys.argv[1:]
+    progname = "symmwanier wannierize" if for_cli else "python wannierize.py"
 
-    args = docopt(doc, argv=argv)
+    parser = argparse.ArgumentParser(
+        prog=progname,
+        description="Compute maximally localized Wannier functions using symmetry information."
+    )
 
-    prefix = args["<prefix>"]
+    parser.add_argument(
+        "-s", "--symmetry",
+        action="store_true",
+        help="Generate Wannier functions in the conventional manner using prefix.isym, prefix.immn, prefix.iamn, and prefix.ieig"
+    )
 
-    wann = Wannierize(prefix=prefix, lsym=args["-s"], lsite_sym=args["-S"])
+    parser.add_argument(
+        "-S", "--site-symmetry",
+        action="store_true",
+        help="Generate symmetry-adapted Wannier functions using prefix.isym, prefix.immn, prefix.iamn, and prefix.ieig"
+    )
+
+    parser.add_argument(
+        "-H", "--high-precision",
+        action="store_true",
+        help="Enable high-precision output for hr.dat and tb.dat"
+    )
+
+    parser.add_argument(
+        "prefix",
+        help="Prefix name of input/output files"
+    )
+
+    args = parser.parse_args(argv)
+
+    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision)
     wann.run()
 
 

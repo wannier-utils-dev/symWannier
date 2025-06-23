@@ -4,20 +4,10 @@
  prefix.immn, prefix.iamn, prefix.ieig, prefix.isym => prefix.mmn, prefix.amn, prefix.eig
 """
 
-DESCRIPTION = __doc__.strip()
-USAGE_CLI = """
-Usage:
-  expand <prefix>
-"""
-
-USAGE_DIRECT = """
-Usage:
-  expand_wannier_inputs.py <prefix>
-"""
-
 import sys
 import os
-from docopt import docopt
+import argparse
+
 from symwannier.nnkp import Nnkp
 from symwannier.sym import Sym
 from symwannier.amn import Amn
@@ -25,12 +15,21 @@ from symwannier.mmn import Mmn
 from symwannier.eig import Eig
 
 def main(argv=None, for_cli=False):
-    usage = USAGE_CLI if for_cli else USAGE_DIRECT
-    doc = f"{DESCRIPTION}\n{usage}"
+    if argv is None:
+        argv = sys.argv[1:]
+    progname = "symmwanier expand" if for_cli else "python expand_wannier_inputs.py"
 
-    args = docopt(doc, argv=argv)
+    parser = argparse.ArgumentParser(
+        prog=progname,
+        description="Expand Wannier input files using symmetry information."
+    )
 
-    prefix = args["<prefix>"]
+    parser.add_argument(
+        "prefix",
+        help="Prefix name of input/output files"
+    )
+
+    prefix = parser.parse_args(argv).prefix
 
     nnkp = Nnkp(file_nnkp=prefix+".nnkp")
     sym = Sym(file_sym=prefix+".isym", nnkp=nnkp)
