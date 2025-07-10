@@ -48,7 +48,7 @@ pw2wannier90.x < pw2wan.in
 
 Calculate Mmn, Amn and Eig in the full BZ using ```expand_wannier_inputs.py```.
 ```
-python expand_wannier_inputs.py prefix
+symwannier expand prefix
 ```
 
 Run wannier90 as usual.
@@ -63,11 +63,11 @@ There are sample input and script files, in examples/Cu and examples/Fe.
 
 Once prefix.immn, prefix.iamn, prefix.ieig, and prefix.isym are obtained, you can construct Wannier functions as follows.
 ```
-python wannierize.py -s prefix
+symwannier wannierize -s prefix
 ```
 To construct symmetry-adapted Wannier functions, use the "-S" option instead of "-s".
 ```
-python wannierize.py -S prefix
+symwannier wannierize -S prefix
 ```
 
 
