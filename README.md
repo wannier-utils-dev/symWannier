@@ -8,16 +8,10 @@ There is an option to calculate symmetry-adapted Wannier functions.
 
 ## Installation
 
-First, please download the scripts:
-```
-git clone git@github.com:wannier-utils-dev/symWannier.git
-```
-
-Then, install the package using pyproject.toml.
-This can be done with pip inside the cloned directory:
+You can install this package using pip:
 
 ```
-pip install .
+pip install symWannier
 ```
 
 ## IBZ calculation using wannier90
