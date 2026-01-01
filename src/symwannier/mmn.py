@@ -31,10 +31,13 @@ class Mmn:
         self.nnkp = nnkp
         self.sym = sym
 
+        # Determine if immn based on file extension
+        ibz = file_mmn.endswith(".immn")
+
         fp, used_path = open_text_or_gz(file_mmn, desc="mmn file")
         self.log.debug(f"Reading mmn from {used_path}")
         with fp:
-            self._read_mmn(fp)
+            self._read_mmn(fp, ibz)
 
         self._mmn_full_klist()
 
@@ -52,8 +55,15 @@ class Mmn:
                 for m, n in itertools.product( range(self.num_bands), repeat=2 ):
                     fp.write("{0.real:18.12f}  {0.imag:18.12f}\n".format(self.mmn[ik,ib,n,m]))
 
-    def _read_mmn(self, fp):
+    def _read_mmn(self, fp, ibz):
         """Parse mmn file content and populate overlap matrices.
+
+        Parameters
+        ----------
+        fp : file object
+            Open file pointer to mmn file.
+        ibz : bool
+            True if file is an IBZ mmn (immn), False otherwise.
 
         Sets the following attributes:
         
@@ -74,15 +84,13 @@ class Mmn:
         if not first_line:
             raise ValueError("Empty mmn file")
 
-        ibz = "IBZ" in first_line  # first line starts with "IBZ" when prefix_ibz.mmn
-        if self.sym is not None and not ibz:
-            raise Exception("Mmn is not for IBZ")
-        if self.sym is None and ibz:
-            raise Exception("IBZ Mmn but no symmetry information.")
-
         if ibz:
+            # immn requires symmetry information
+            if self.sym is None:
+                raise Exception("IBZ Mmn requires symmetry information.")
             self.log.info("Reading IBZ mmn file")
         else:
+            # Regular mmn can be used with or without symmetry
             self.log.info("Reading mmn file")
 
         header = fp.readline()
