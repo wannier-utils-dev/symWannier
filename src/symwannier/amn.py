@@ -5,16 +5,32 @@ import scipy.linalg
 import os
 import itertools
 import gzip
+import logging
 
 from symwannier.nnkp import Nnkp
 from symwannier.sym import Sym
 
 class Amn():
-    """
-    amn file
+    """Reader and processor for Amn files
     Amn(k) = <psi_mk|g_n>
     """
-    def __init__(self, file_amn, nnkp, sym = None):
+    def __init__(self, file_amn, nnkp, sym = None, log=None):
+        """Load Amn data from file and prepare symmetry handling.
+
+        Parameters
+        ----------
+        file_amn : str
+            Path to amn file (optionally gzipped).
+        nnkp : Nnkp
+            Parsed nnkp object providing k-point and neighbor info.
+        sym : Sym, optional
+            Symmetry data. If provided, Amn is symmetrized/expanded accordingly.
+        log : logging.Logger, optional
+            Logger to use; if not provided a module logger is created.
+        """
+        self.log = log or logging.getLogger(__name__)
+        if not self.log.handlers:
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
 
         self.nnkp = nnkp
         self.sym = sym
@@ -29,7 +45,8 @@ class Amn():
             raise Exception("failed to read amn file: " + file_amn)
 
     def _read_amn(self, fp):
-        print("  Reading amn file")
+        """Read amn contents from an open file-like object."""
+        self.log.info("Reading amn file")
         lines = fp.readlines()
         num_bands, nk, num_wann = [ int(x) for x in lines[1].split() ]
         dat = np.genfromtxt(lines[2:]).reshape(nk, num_wann, num_bands, 5)
@@ -50,9 +67,10 @@ class Amn():
             self.amn = self.symmetrize_expand(amn)
 
     def symmetrize_Gk(self, amn, thr=0):
+        """Symmetrize Amn (or U) on irreducible k-points using site symmetry G_k."""
         amn_sym = self._symmetrize_Gk_internal(amn)
         diff = np.sum(np.abs(amn_sym - amn))/self.sym.nks
-        print("  symmetrize Gk diff1 = {:15.5e}".format(diff))
+        self.log.info("symmetrize Gk diff1 = %.5e", diff)
         
         #if thr > 0:
         #    for i in range(20):
@@ -124,6 +142,7 @@ class Amn():
         return Umat
 
     def Umat_symmetrize(self, Umat, Umat_opt = None):
+        """Symmetrize Umat (and optionally combine with disentanglement rotations)."""
         Umat_irk = Umat[self.sym.iks2ik[:]]
         if Umat_opt is not None:
             Umat_opt_irk = Umat_opt[self.sym.iks2ik[:]]
@@ -134,10 +153,11 @@ class Amn():
         else:
             Umat_irk = self.symmetrize_Gk(Umat_irk)
             Umat_new = self.symmetrize_expand(Umat_irk)
-        print("  symmetrize expand diff = {:15.5e}".format(np.sum(np.abs(Umat_new - Umat))/self.nk))
+        self.log.info("symmetrize expand diff = %.5e", np.sum(np.abs(Umat_new - Umat))/self.nk)
         return Umat_new
 
     def write_amn(self, file_amn):
+        """Write Amn data back to disk in wannier90 format."""
         with open(file_amn, "w") as fp:
             fp.write("Amn created by amn.py\n")
             fp.write("{} {} {}\n".format(self.num_bands, self.nk, self.num_wann))
@@ -146,12 +166,24 @@ class Amn():
                 fp.write("{0} {1} {2}  {3.real:18.12f}  {3.imag:18.12f}\n".format(n+1, m+1, ik+1, self.amn[ik,n,m]))
 
     def Umat(self, index_win=None, check=True, Umat_opt=None):
-        """
-        calculate initial Umat
+        """Construct initial U matrices from Amn via SVD (and optional disentanglement).
+           amn[:num_bands, :num_wann, :nk]
+           m[:num_bands, :num_wann] => SVD => u[:num_bands, :num_bands], v[:num_wann, :num_wann]
+           Umat[:num_bands, :num_wann] = u[:num_bands, :num_wann] . v[:num_wann, :num_wann]
 
-        amn[:num_bands, :num_wann, :nk]
-        m[:num_bands, :num_wann] => SVD => u[:num_bands, :num_bands], v[:num_wann, :num_wann]
-        Umat[:num_bands, :num_wann] = u[:num_bands, :num_wann] . v[:num_wann, :num_wann]
+        Parameters
+        ----------
+        index_win : ndarray[bool], optional
+            Disentanglement window mask per k and band. Outside window elements are zeroed.
+        check : bool, optional
+            If True and no symmetry, verify unitarity per k-point.
+        Umat_opt : ndarray, optional
+            Disentanglement rotations; if provided, Amn is rotated before SVD.
+
+        Returns
+        -------
+        ndarray
+            Umat of shape (nk, num_bands or num_wann, num_wann).
         """
         if Umat_opt is None:   # Umat simply from Amn
             Umat = np.zeros_like(self.amn)
@@ -182,6 +214,7 @@ class Amn():
         return Umat
 
     def projection_sym_mat(self):
+        """Return rotation matrices and lattice shifts for projecting Wannier centers."""
         pos = self.nnkp.nw2r     # pos[num_wann, 3]: position of each Wannier
         Rmat = self.sym.rotmat   # Rotation matrix
 

@@ -4,12 +4,30 @@ import numpy as np
 import os
 import gzip
 import itertools
+import logging
 
 from symwannier.nnkp import Nnkp
 from symwannier.sym import Sym
 
 class Mmn:
-    def __init__(self, file_mmn, nnkp, sym=None):
+    """Reader for mmn files (overlap matrices between neighboring k-points)."""
+    def __init__(self, file_mmn, nnkp, sym=None, log=None):
+        """Load Mmn data and set up k-space neighbor mappings.
+
+        Parameters
+        ----------
+        file_mmn : str
+            Path to mmn file (optionally gzipped).
+        nnkp : Nnkp
+            Parsed nnkp object.
+        sym : Sym, optional
+            Symmetry data for IBZ handling.
+        log : logging.Logger, optional
+            Logger instance.
+        """
+        self.log = log or logging.getLogger(__name__)
+        if not self.log.handlers:
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
         self.nnkp = nnkp
         self.sym = sym
 
@@ -25,6 +43,7 @@ class Mmn:
         self._mmn_full_klist()
 
     def write_mmn(self, file_mmn):
+        """Write overlap matrices to file in wannier90 format."""
         with open(file_mmn, "w") as fp:
             fp.write("Mmn created by mmn.py\n")
             fp.write("{} {} {}\n".format(self.num_bands, self.nk, self.nb))
@@ -38,14 +57,22 @@ class Mmn:
                     fp.write("{0.real:18.12f}  {0.imag:18.12f}\n".format(self.mmn[ik,ib,n,m]))
 
     def _read_mmn(self, fp):
-        """
-        read mmn and set variables
-        num_bands:  number of bands
-        nks:        number of irreducible k-points
-        nb:         number of b-vectors
-        mmn:        Mmn
-        kb2k:       index of k+b
-        kpb_info:   information about k+b
+        """Parse mmn file content and populate overlap matrices.
+
+        Sets the following attributes:
+        
+        num_bands : int
+            Number of bands.
+        nks : int
+            Number of irreducible k-points.
+        nb : int
+            Number of b-vectors.
+        mmn : ndarray
+            Overlap matrices M^k,b_mn.
+        kb2k : ndarray
+            Index of k+b.
+        kpb_info : ndarray
+            Information about k+b.
         """
         ibz = "IBZ" in fp.readline()  # first line starts with "IBZ" when prefix_ibz.mmn
         if self.sym is not None and not ibz:
@@ -54,9 +81,9 @@ class Mmn:
             raise Exception("IBZ Mmn but no symmetry information.")
 
         if ibz:
-            print("  Reading IBZ mmn file")
+            self.log.info("Reading IBZ mmn file")
         else:
-            print("  Reading mmn file")
+            self.log.info("Reading mmn file")
 
         self.num_bands, self.nks, self.nb = [ int(x) for x in fp.readline().split() ]
 
