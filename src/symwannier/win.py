@@ -2,15 +2,31 @@
 
 import numpy as np
 import os
+import logging
 
 class Win:
-    def __init__(self, prefix):
+    """Reader for wannier90 .win input files."""
+    def __init__(self, prefix, log=None):
+        """Parse .win file and extract parameters.
+
+        Parameters
+        ----------
+        prefix : str
+            Prefix for .win file.
+        log : logging.Logger, optional
+            Logger instance.
+        """
+        self.log = log or logging.getLogger(__name__)
+        if not self.log.handlers:
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
         file_win = prefix + ".win"
-        assert os.path.exists(file_win)
+        if not os.path.exists(file_win):
+            raise FileNotFoundError(f"win file not found: {file_win}")
 
         self._read_win_file(file_win)
 
     def _read_win_file(self, file_win):
+        """Read and parse wannier90 .win file parameters."""
         with open (file_win) as fp:
             self.lines = fp.readlines()
 

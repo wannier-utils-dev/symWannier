@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 """
- Expand Wannier input files using symmetry information:
- prefix.immn, prefix.iamn, prefix.ieig, prefix.isym => prefix.mmn, prefix.amn, prefix.eig
+Expand Wannier input files using symmetry information:
+prefix.immn, prefix.iamn, prefix.ieig, prefix.isym => prefix.mmn, prefix.amn, prefix.eig
 """
 
 import sys
 import os
 import argparse
+import logging
 
 from symwannier.nnkp import Nnkp
 from symwannier.sym import Sym
@@ -15,9 +16,21 @@ from symwannier.mmn import Mmn
 from symwannier.eig import Eig
 
 def main(argv=None, for_cli=False):
+    """Expand symmetry-reduced Wannier input files to full k-point sets.
+
+    Parameters
+    ----------
+    argv : list, optional
+        Command-line arguments.
+    for_cli : bool, optional
+        Whether called from CLI.
+    """
     if argv is None:
         argv = sys.argv[1:]
     progname = "symmwanier expand" if for_cli else "python expand_wannier_inputs.py"
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    log = logging.getLogger(__name__)
 
     parser = argparse.ArgumentParser(
         prog=progname,
@@ -31,22 +44,22 @@ def main(argv=None, for_cli=False):
 
     prefix = parser.parse_args(argv).prefix
 
-    nnkp = Nnkp(file_nnkp=prefix+".nnkp")
-    sym = Sym(file_sym=prefix+".isym", nnkp=nnkp)
+    nnkp = Nnkp(file_nnkp=prefix+".nnkp", log=log)
+    sym = Sym(file_sym=prefix+".isym", nnkp=nnkp, log=log)
 
     # Eig
-    print(" {0:s}.ieig => {0:s}.eig".format(prefix))
-    eig = Eig(file_eig=prefix+".ieig", sym=sym)
+    log.info(f"{prefix}.ieig => {prefix}.eig")
+    eig = Eig(file_eig=prefix+".ieig", sym=sym, log=log)
     eig.write_eig(prefix+".eig")
 
     # Amn
-    print(" {0:s}.iamn => {0:s}.amn".format(prefix))
-    amn = Amn(file_amn=prefix+".iamn", sym=sym, nnkp=nnkp)
+    log.info(f"{prefix}.iamn => {prefix}.amn")
+    amn = Amn(file_amn=prefix+".iamn", sym=sym, nnkp=nnkp, log=log)
     amn.write_amn(prefix+".amn")
 
     # Mmn
-    print(" {0:s}.immn => {0:s}.mmn".format(prefix))
-    mmn = Mmn(file_mmn=prefix+".immn", nnkp=nnkp, sym=sym)
+    log.info(f"{prefix}.immn => {prefix}.mmn")
+    mmn = Mmn(file_mmn=prefix+".immn", nnkp=nnkp, sym=sym, log=log)
     mmn.write_mmn(prefix+".mmn")
 
 if __name__ == '__main__':

@@ -15,6 +15,7 @@ import textwrap
 import datetime
 import argparse
 import sys
+import logging
 
 from symwannier.win import Win
 from symwannier.mmn import Mmn
@@ -25,10 +26,41 @@ from symwannier.nnkp import Nnkp
 from symwannier.timedata import TimeData
 
 class Wannierize:
-    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False):
-        self.time = TimeData()
-        self.win = Win(prefix)
-        self.nnkp = Nnkp(prefix + ".nnkp")
+    """Compute maximally localized (and symmetry-adapted) Wannier functions.
+
+    Parameters
+    ----------
+    prefix : str
+        Prefix for input/output files (e.g., ``prefix.win``, ``prefix.mmn``).
+    lsym : bool, optional
+        Use symmetry-aware inputs (``*.isym``, ``*.immn``, ``*.iamn``, ``*.ieig``).
+    lsite_sym : bool, optional
+        Apply site symmetry after Wannierization (implies ``lsym=True``).
+    prec : bool, optional
+        If True, write high-precision outputs for hr.dat / tb.dat.
+    log_level : int or str, optional
+        Logging level (e.g., logging.DEBUG, logging.INFO, or 'DEBUG', 'INFO').
+    log : logging.Logger, optional
+        Logger to use; if not provided a module logger is created.
+    """
+
+    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, log_level=None, log=None):
+        self.log = log or logging.getLogger(__name__)
+        if not self.log.handlers:
+            # Determine log level
+            if log_level is None:
+                level = logging.INFO
+            elif isinstance(log_level, str):
+                level = getattr(logging, log_level.upper(), logging.INFO)
+            else:
+                level = log_level
+            logging.basicConfig(level=level, format="%(message)s")
+        self.log.debug(f"Initializing Wannierize with prefix={prefix}, lsym={lsym}, lsite_sym={lsite_sym}")
+        self.prefix = prefix
+        self.time = TimeData(log=self.log)
+        self.win = Win(prefix, log=self.log)
+        self.nnkp = Nnkp(prefix + ".nnkp", log=self.log)
+        self.log.debug(f"Loaded nnkp: nk={self.nnkp.nk}, nb={self.nnkp.nb}, num_wann={self.nnkp.num_wann}")
         self.lsym = lsym
         self.lsite_sym = lsite_sym
         self.prec = prec
@@ -37,16 +69,18 @@ class Wannierize:
 
         if self.lsym:
             self.time.start_clock("sym read")
-            self.sym = Sym(file_sym=prefix + ".isym", nnkp=self.nnkp)
+            self.sym = Sym(file_sym=prefix + ".isym", nnkp=self.nnkp, log=self.log)
             self.time.stop_clock("sym read")
+            self.log.debug(f"Loaded symmetry: nsym={len(self.sym.s)}")
             ext = 'i'
         else:
             self.sym = None
             ext = ''
 
         self.time.start_clock("mmn read")
-        mmn = Mmn(file_mmn = prefix+"." + ext + "mmn", nnkp=self.nnkp, sym=self.sym)
+        mmn = Mmn(file_mmn = prefix+"." + ext + "mmn", nnkp=self.nnkp, sym=self.sym, log=self.log)
         self.time.stop_clock("mmn read")
+        self.log.debug(f"Loaded Mmn: shape={mmn.mmn.shape}")
 
         self.mmn0 = mmn.mmn
         self.num_bands = mmn.num_bands
@@ -59,9 +93,11 @@ class Wannierize:
         self.kb2k = mmn.kb2k   # index of k+b
 
         self.time.start_clock("amn read")
-        self.amn = Amn(prefix+"." + ext + "amn", nnkp=self.nnkp, sym=self.sym)
+        self.amn = Amn(prefix+"." + ext + "amn", nnkp=self.nnkp, sym=self.sym, log=self.log)
         self.time.stop_clock("amn read")
-        self.eig = Eig(prefix+"." + ext + "eig", sym=self.sym)
+        self.eig = Eig(prefix+"." + ext + "eig", sym=self.sym, log=self.log)
+        self.log.debug(f"Loaded Amn: shape={self.amn.amn.shape}, Eig: shape={self.eig.eig.shape}")
+        self._validate_inputs()
         self.Umat_opt = None
 
         self.file_hr_dat = prefix + "_py_hr.dat"
@@ -76,6 +112,7 @@ class Wannierize:
         """
         main subroutine
         """
+        self.log.info("Starting wannierization for prefix '%s' (lsym=%s, lsite_sym=%s)", self.prefix, self.lsym, self.lsite_sym)
         # disentanglement. minimize omega_I
         if self.disentangle:
             self.dis_window()
@@ -92,26 +129,31 @@ class Wannierize:
         """
         wannierization procedure
         """
+        self.log.debug("Starting wannierization loop")
         self.init_Umat_and_Mmn()
 
         omega = self.calc_omega(self.mmn)
+        self.log.debug(f"Initial omega_tot = {omega:.8f}")
         print("! Initial:  omega_tot = {:15.8f}    time: {:12.6f}".format(omega, self.time.get_time()))
         self.show_spreads()
         converged = False
+        self.time.start_clock("wannierization")
         for i in range(self.win.num_iter):
-            self.time.start_clock("wannierization")
+            self.log.debug(f"Wannierization iteration {i+1}/{self.win.num_iter}")
             omega_prev = omega
             dw = self.calc_dw()
             omega = self.update_mmn(dw, omega)
+            self.log.debug(f"Iteration {i+1}: omega_tot = {omega:.8f}, delta_omega = {abs(omega - omega_prev):.2e}")
             print("! {:5d}-th  omega_tot = {:15.8f}    time: {:12.6f}".format(i+1, omega, self.time.get_time()))
             self.show_spreads()
             self.calc_omega_detail(self.mmn)
 
             converged = np.abs(omega - omega_prev) < self.omega_thr
             if converged:
+                self.log.debug("Wannierization converged")
                 print("  convergence has been achieved")
                 break
-            self.time.stop_clock("wannierization")
+        self.time.stop_clock("wannierization")
         print("! Final:    omega_tot = {:15.8f}    time: {:12.6f}".format(omega, self.time.get_time()))
 
     def post_process(self):
@@ -130,14 +172,43 @@ class Wannierize:
         self.write_tb()
         self.time.show_all()
 
+    def _validate_inputs(self):
+        """Validate basic consistency of loaded inputs to fail fast with clear errors."""
+        self.log.debug(f"Validating inputs: num_wann={self.num_wann}, num_bands={self.num_bands}, nk={self.nnkp.nk}, nb={self.nnkp.nb}")
+        if self.num_wann > self.num_bands:
+            raise ValueError("num_wann ({}) must not exceed num_bands ({})".format(self.num_wann, self.num_bands))
+
+        if self.mmn0.shape[0] != self.nnkp.nk or self.mmn0.shape[1] != self.nnkp.nb:
+            raise ValueError("mmn shape {} inconsistent with nk={} or nb={}".format(self.mmn0.shape, self.nnkp.nk, self.nnkp.nb))
+
+        if getattr(self.amn, "nk", None) and self.amn.nk != self.nnkp.nk:
+            raise ValueError("amn nk={} inconsistent with nnkp nk={}".format(self.amn.nk, self.nnkp.nk))
+
+        if getattr(self.eig, "nk", None) and self.eig.nk != self.nnkp.nk:
+            raise ValueError("eig nk={} inconsistent with nnkp nk={}".format(self.eig.nk, self.nnkp.nk))
+
     def show_spreads(self):
+        """Print Wannier function centers and spreads in Cartesian coordinates."""
         print("{:>8s},{:>46s},{:>16s}".format("WF num", "center in cartesian coords", "spread (A^2)"))
         for nw in range(self.num_wann):
             print("  {0:6d}   ( {1[0]:12.6f}, {1[1]:12.6f}, {1[2]:12.6f} )  {2:15.8f}".format(nw+1, self.r[nw].real, self.spreads[nw].real))
 
     def update_Mmn_by_Umat(self, mmn, Umat):
-        """
-        return Mmn = U^k Mmn^(0) U^(k+b)
+        """Transform overlap matrix Mmn by unitary rotation.
+        
+        Computes Mmn = U^k Mmn^(0) U^(k+b) following R1_Eq.(61).
+        
+        Parameters
+        ----------
+        mmn : ndarray, shape (nk, nb, num_bands, num_bands)
+            Overlap matrices between neighboring k-points.
+        Umat : ndarray, shape (nk, num_bands, num_wann)
+            Unitary rotation matrices at each k-point.
+        
+        Returns
+        -------
+        ndarray, shape (nk, nb, num_wann, num_wann)
+            Rotated overlap matrices.
         """
         #for k in range(self.nk):
         #    assert np.allclose( np.matmul(Umat[:,:,k], np.transpose(np.conj(Umat[:,:,k]))), np.eye(self.num_bands) ), "Umat is not unitary for k = {}".format(k)
@@ -148,15 +219,16 @@ class Wannierize:
         initialize self.Umat (U^k) and calculate self.mmn (Mmn = U^k Mmn^(0) U^k+b)
         Mmn0 (input) -> Mmn1 (disentangle) -> Mmn
         """
+        self.log.debug(f"init_Umat_and_Mmn: disentangle={self.disentangle}")
         if self.disentangle:
-            print("  init Umatrix and Mmn using Umatrix_opt")
+            self.log.info("init Umatrix and Mmn using Umatrix_opt")
             self.Umat = self.amn.Umat(index_win=self.index_win, Umat_opt=self.Umat_opt)
             self.mmn1 = self.update_Mmn_by_Umat(self.mmn0, self.Umat_opt)
             self.mmn = self.update_Mmn_by_Umat(self.mmn1, self.Umat)
             self.calc_omega_detail(self.mmn)
 
         else:  # without disentangle
-            print("  init Umatrix and Mmn")
+            self.log.info("init Umatrix and Mmn")
             if hasattr(self, "amn"):
                 self.Umat = self.amn.Umat()
                 self.mmn1 = self.mmn0
@@ -170,14 +242,24 @@ class Wannierize:
                 self.mmn = self.mmn1
 
     def calc_omega(self, mmn):
+        """Calculate total spread functional Omega.
+        
+        Computes Omega = sum_n [<r^2>_n - <r>_n^2] following R1_Eqs.(11,31,32).
+        Updates self.r (Wannier function centers) and self.spreads as side effects.
+        
+        Parameters
+        ----------
+        mmn : ndarray, shape (nk, nb, num_wann, num_wann)
+            Overlap matrices M^(k,b)_mn.
+        
+        Returns
+        -------
+        float
+            Total spread Omega (sum of individual spreads).
         """
-        calculate Omega = sum <r^2> - <r>^2
-        update self.r (<r>)
-        """
-        #r = 1j/self.nk * np.einsum("b,ba,nnkb->na", self.wb, self.bvec, self.mmn, optimize=True)
-        #r -= 1j * np.einsum("b,ba->a", self.wb, self.bvec)
-        #print("r = ", r)
+        self.log.debug(f"calc_omega: mmn.shape={mmn.shape}")
         mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
+        self._assert_nonzero_mnn(mnn, "calc_omega")
         imlnmnn = np.log(mnn).imag
         r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
 
@@ -190,8 +272,15 @@ class Wannierize:
         return np.sum(self.spreads)
 
     def calc_omega_detail(self, mmn):
-        """
-        calculate OmegaI, Omega_D, Omega_OD
+        """Decompose spread into gauge-invariant (I), diagonal (D), and off-diagonal (OD) parts.
+        
+        Following R1_Eq.(13,18), Omega = OmegaI + OmegaD + OmegaOD.
+        Prints the three components to stdout.
+        
+        Parameters
+        ----------
+        mmn : ndarray, shape (nk, nb, num_wann, num_wann)
+            Overlap matrices M^(k,b)_mn.
         """
         mmn2 = np.einsum("kbmn,kbmn->kb", mmn, np.conj(mmn), optimize=True).real
         OmegaI = np.einsum("b, kb->", self.wb, self.num_wann - mmn2, optimize=True)/self.nk
@@ -200,6 +289,7 @@ class Wannierize:
         OmegaOD = np.einsum("b, kb->", self.wb, mmn2 - mnn2, optimize=True)/self.nk
 
         mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
+        self._assert_nonzero_mnn(mnn, "calc_omega_detail")
         imlnmnn = np.log(mnn).imag
         r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
         qn = imlnmnn + np.einsum("ba, na->bn", self.bvec, r, optimize=True)[np.newaxis,:,:]
@@ -210,10 +300,19 @@ class Wannierize:
         print("  OmegaOD = {:15.10f}".format(OmegaOD))
 
     def calc_dw(self):
+        """Compute the gradient matrix G for steepest-descent update.
+        
+        Calculates the anti-Hermitian matrix dW(k) = G(k) following R1_Eq.(52),
+        used to update the unitary rotations in the direction of decreasing spread.
+        
+        Returns
+        -------
+        ndarray, shape (nk, num_wann, num_wann)
+            Gradient matrices dW(k), anti-Hermitian at each k-point.
         """
-        calculate G in R1_Eq.(52)
-        """
+        self.log.debug("calc_dw: computing gradient matrices")
         mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
+        self._assert_nonzero_mnn(mnn, "calc_dw")
         imlnmnn = np.log(mnn).imag
         r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
         Rmn = np.einsum("kbmn,kbn->kbmn", self.mmn, np.conj(mnn), optimize=True)  # R1_Eq.(45)
@@ -225,9 +324,42 @@ class Wannierize:
         dw = 4/self.nk * np.einsum("b,kbmn->kmn", self.wb, AR - ST, optimize=True)  # R1_Eq.(52)
         return dw
 
-    def calc_expdw(self, dw):
+    def _assert_nonzero_mnn(self, mnn, context):
+        """Validate that diagonal overlaps are nonzero before logarithm.
+        
+        Parameters
+        ----------
+        mnn : ndarray
+            Diagonal overlap elements M^(k,b)_nn.
+        context : str
+            Caller name for error messages.
+        
+        Raises
+        ------
+        ValueError
+            If any element of mnn is exactly zero.
         """
-        calculate exp(dW) by diagonalizing i*dW  (i*dW is hermite)
+        self.log.debug(f"_assert_nonzero_mnn: checking {context}, mnn.shape={mnn.shape}")
+        if np.any(mnn == 0):
+            count = np.count_nonzero(mnn == 0)
+            self.log.error(f"{context}: mnn contains {count} zero elements")
+            raise ValueError("{}: mnn contains {} zero elements; log undefined".format(context, count))
+
+    def calc_expdw(self, dw):
+        """Compute matrix exponential exp(dW) via eigendecomposition.
+        
+        Since dW is anti-Hermitian, i*dW is Hermitian and can be diagonalized with real eigenvalues.
+        Then exp(dW) = V exp(-i*lambda) V^dagger.
+        
+        Parameters
+        ----------
+        dw : ndarray, shape (nk, num_wann, num_wann)
+            Anti-Hermitian gradient matrices.
+        
+        Returns
+        -------
+        ndarray, shape (nk, num_wann, num_wann)
+            Unitary matrices exp(dW(k)).
         """
         expdw = np.zeros_like(dw)
         for k in range(self.nk):
@@ -238,10 +370,24 @@ class Wannierize:
         return expdw
 
     def update_mmn(self, dw, omega):
+        """Update unitary rotations and overlaps using line search for optimal step size.
+        
+        Performs a quadratic line search to find the optimal mixing parameter alpha
+        by evaluating Omega at alpha=0, 1/2, 1, then updates U(k) -> U(k) exp(alpha*dW(k)).
+        
+        Parameters
+        ----------
+        dw : ndarray, shape (nk, num_wann, num_wann)
+            Gradient matrices dW(k).
+        omega : float
+            Current total spread (at alpha=0).
+        
+        Returns
+        -------
+        float
+            New total spread after optimal rotation.
         """
-        calculate optimal alpha and update self.Umat (U^(k)) and self.mmn (Mmn)
-        return omega
-        """
+        self.log.debug("update_mmn: computing line search")
         Umat1 = np.einsum("kmn, knl->kml", self.Umat, self.calc_expdw(dw), optimize=True)  # R1_Eq.(60)
         mmn1 = self.update_Mmn_by_Umat(self.mmn1, Umat1)
         omega1 = self.calc_omega(mmn1)
@@ -257,16 +403,15 @@ class Wannierize:
             alpha = -(4*omega2-omega1-3*omega) /2/ (2*omega+2*omega1-4*omega2)
             alpha = min(1, alpha)
             alpha = max(0.01, alpha)
-        #print("{:10.5f} {:10.5f} {:10.5f} {:10.5f}".format(omega, omega2, omega1, alpha))
+        self.log.debug(f"update_mmn: alpha={alpha:.4f}, omega(0)={omega:.8f}, omega(1/2)={omega2:.8f}, omega(1)={omega1:.8f}")
 
         self.Umat = np.einsum("kmn, knl->kml", self.Umat, self.calc_expdw(alpha*dw), optimize=True)  # R1_Eq.(60)
-        #if self.lsite_sym:
-        #    self.Umat = self.amn.Umat_symmetrize(self.Umat, self.Umat_opt)
         self.mmn = self.update_Mmn_by_Umat(self.mmn1, self.Umat)
         omega = self.calc_omega(self.mmn)
         return omega
 
     def dis_window(self):
+        """Define energy windows for disentanglement."""
         # array with self.nband size
         self.index_froz = (self.eig.eig > self.win.dis_froz_min) & (self.eig.eig < self.win.dis_froz_max)
         self.index_win = (self.eig.eig > self.win.dis_win_min) & (self.eig.eig < self.win.dis_win_max)
@@ -274,11 +419,11 @@ class Wannierize:
         self.len_nfroz = np.array([ np.sum(self.index_nfroz[k,:]) for k in range(self.nk) ])
         self.ndimwin = np.array([ np.sum(self.index_win[k,:]) for k in range(self.nk) ])
         self.ndimfroz = np.array([ np.sum(self.index_froz[k,:]) for k in range(self.nk) ])
+        self.log.debug(f"dis_window: ndimwin min={np.min(self.ndimwin)}, max={np.max(self.ndimwin)}, ndimfroz min={np.min(self.ndimfroz)}, max={np.max(self.ndimfroz)}")
 
     def dis_project(self):
-        """
-        calculate self.Umat_opt and update mmn0U from amn file
-        """
+        """Calculate self.Umat_opt and update mmn0 from amn file."""
+        self.log.debug("dis_project: starting projection")
         assert hasattr(self, "amn"), "file_amn is not specified"
         self.Umat_opt = self.amn.Umat(index_win = self.index_win)  # Umat_opt[:num_bands, :num_wann, :nk]
 
@@ -497,13 +642,21 @@ def main(argv=None, for_cli=False):
     )
 
     parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        help="Set logging level (default: INFO)"
+    )
+
+    parser.add_argument(
         "prefix",
         help="Prefix name of input/output files"
     )
 
     args = parser.parse_args(argv)
 
-    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision)
+    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, log_level=args.log_level)
     wann.run()
 
 

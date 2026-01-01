@@ -1,30 +1,48 @@
 #!/usr/bin/env python
 
 import numpy as np
-import os
-import gzip
 import itertools
+import logging
 
 from symwannier.nnkp import Nnkp
 from symwannier.sym import Sym
+from symwannier.io_utils import open_text_or_gz
 
 class Mmn:
-    def __init__(self, file_mmn, nnkp, sym=None):
+    """Reader for mmn files (overlap matrices between neighboring k-points)."""
+
+    def __init__(self, file_mmn, nnkp, sym=None, log=None):
+        """Load Mmn data and set up k-space neighbor mappings.
+
+        Parameters
+        ----------
+        file_mmn : str
+            Path to mmn file (optionally gzipped).
+        nnkp : Nnkp
+            Parsed nnkp object.
+        sym : Sym, optional
+            Symmetry data for IBZ handling.
+        log : logging.Logger, optional
+            Logger instance.
+        """
+        self.log = log or logging.getLogger(__name__)
+        if not self.log.handlers:
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
         self.nnkp = nnkp
         self.sym = sym
 
-        if os.path.exists(file_mmn):
-            with open(file_mmn) as fp:
-                self._read_mmn(fp)
-        elif os.path.exists(file_mmn + ".gz"):
-            with gzip.open(file_mmn + ".gz", 'rt') as fp:
-                self._read_mmn(fp)
-        else:
-            raise Exception("failed to read mmn file: " + file_mmn)
+        # Determine if immn based on file extension
+        ibz = file_mmn.endswith(".immn")
+
+        fp, used_path = open_text_or_gz(file_mmn, desc="mmn file")
+        self.log.debug(f"Reading mmn from {used_path}")
+        with fp:
+            self._read_mmn(fp, ibz)
 
         self._mmn_full_klist()
 
     def write_mmn(self, file_mmn):
+        """Write overlap matrices to file in wannier90 format."""
         with open(file_mmn, "w") as fp:
             fp.write("Mmn created by mmn.py\n")
             fp.write("{} {} {}\n".format(self.num_bands, self.nk, self.nb))
@@ -37,39 +55,67 @@ class Mmn:
                 for m, n in itertools.product( range(self.num_bands), repeat=2 ):
                     fp.write("{0.real:18.12f}  {0.imag:18.12f}\n".format(self.mmn[ik,ib,n,m]))
 
-    def _read_mmn(self, fp):
+    def _read_mmn(self, fp, ibz):
+        """Parse mmn file content and populate overlap matrices.
+
+        Parameters
+        ----------
+        fp : file object
+            Open file pointer to mmn file.
+        ibz : bool
+            True if file is an IBZ mmn (immn), False otherwise.
+
+        Sets the following attributes:
+        
+        num_bands : int
+            Number of bands.
+        nks : int
+            Number of irreducible k-points.
+        nb : int
+            Number of b-vectors.
+        mmn : ndarray
+            Overlap matrices M^k,b_mn.
+        kb2k : ndarray
+            Index of k+b.
+        kpb_info : ndarray
+            Information about k+b.
         """
-        read mmn and set variables
-        num_bands:  number of bands
-        nks:        number of irreducible k-points
-        nb:         number of b-vectors
-        mmn:        Mmn
-        kb2k:       index of k+b
-        kpb_info:   information about k+b
-        """
-        ibz = "IBZ" in fp.readline()  # first line starts with "IBZ" when prefix_ibz.mmn
-        if self.sym is not None and not ibz:
-            raise Exception("Mmn is not for IBZ")
-        if self.sym is None and ibz:
-            raise Exception("IBZ Mmn but no symmetry information.")
+        first_line = fp.readline()
+        if not first_line:
+            raise ValueError("Empty mmn file")
 
         if ibz:
-            print("  Reading IBZ mmn file")
+            # immn requires symmetry information
+            if self.sym is None:
+                raise Exception("IBZ Mmn requires symmetry information.")
+            self.log.info("Reading IBZ mmn file")
         else:
-            print("  Reading mmn file")
+            # Regular mmn can be used with or without symmetry
+            self.log.info("Reading mmn file")
 
-        self.num_bands, self.nks, self.nb = [ int(x) for x in fp.readline().split() ]
+        header = fp.readline()
+        if not header:
+            raise ValueError("mmn file missing header line")
+        self.num_bands, self.nks, self.nb = [ int(x) for x in header.split() ]
 
         self.mmn = np.zeros([self.nks, self.nb, self.num_bands, self.num_bands], dtype=complex)
         self.kpb_info = np.zeros([self.nks, self.nb, 5], dtype=int)
 
+        block_size = self.num_bands * self.num_bands
         for ik, ib in itertools.product(range(self.nks), range(self.nb)):
-            d = [ int(x) for x in fp.readline().split() ]
+            head = fp.readline()
+            if not head:
+                raise ValueError("mmn file ended unexpectedly while reading header")
+            d = [ int(x) for x in head.split() ]
             assert ik == d[0]-1, "{} {}".format(ik, d[0])
             self.kpb_info[ik,ib,:] = d
-            for m, n in itertools.product( range(self.num_bands), repeat=2 ):
-                dat = [ float(x) for x in fp.readline().split() ]
-                self.mmn[ik,ib,n,m] = dat[0] + 1j*dat[1]
+
+            block_lines = list(itertools.islice(fp, block_size))
+            if len(block_lines) != block_size:
+                raise ValueError("mmn file ended unexpectedly while reading data block")
+            flat = np.fromstring(" ".join(block_lines), sep=" ")
+            data = flat.reshape(self.num_bands, self.num_bands, 2)
+            self.mmn[ik,ib,:,:] = data[:,:,0].T + 1j * data[:,:,1].T
 
     def _mmn_full_klist(self):
         if self.sym is None:

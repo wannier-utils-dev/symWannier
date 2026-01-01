@@ -3,10 +3,25 @@
 import numpy as np
 import itertools
 import scipy.linalg
+import logging
+import os
 
 
 class Nnkp:
-    def __init__(self, file_nnkp):
+    """Reader for nnkp files (neighbor k-point information from wannier90)."""
+    def __init__(self, file_nnkp, log=None):
+        """Parse nnkp file and compute b-vector list.
+
+        Parameters
+        ----------
+        file_nnkp : str
+            Path to nnkp file.
+        log : logging.Logger, optional
+            Logger instance.
+        """
+        self.log = log or logging.getLogger(__name__)
+        if not self.log.handlers:
+            logging.basicConfig(level=logging.INFO, format="%(message)s")
 
         self.read_file(file_nnkp)
 
@@ -14,6 +29,20 @@ class Nnkp:
 
 
     def read_file(self, file_nnkp):
+        """Parse nnkp file and extract lattice, kpoints, neighbors, and projections.
+
+        Parameters
+        ----------
+        file_nnkp : str
+            Path to wannier90 nnkp file.
+
+        Raises
+        ------
+        FileNotFoundError
+            If nnkp file cannot be found.
+        """
+        if not os.path.exists(file_nnkp):
+            raise FileNotFoundError(f"nnkp file not found: {file_nnkp}")
         try:
             with open(file_nnkp) as fp:
                 lines = fp.readlines()
