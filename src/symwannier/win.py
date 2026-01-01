@@ -20,7 +20,8 @@ class Win:
         if not self.log.handlers:
             logging.basicConfig(level=logging.INFO, format="%(message)s")
         file_win = prefix + ".win"
-        assert os.path.exists(file_win)
+        if not os.path.exists(file_win):
+            raise FileNotFoundError(f"win file not found: {file_win}")
 
         self._read_win_file(file_win)
 

@@ -4,6 +4,7 @@ import numpy as np
 import itertools
 import scipy.linalg
 import logging
+import os
 
 
 class Nnkp:
@@ -37,15 +38,16 @@ class Nnkp:
 
         Raises
         ------
-        Exception
-            If nnkp file cannot be found or read.
+        FileNotFoundError
+            If nnkp file cannot be found.
         """
-        try:
-            with open(file_nnkp) as fp:
-                lines = fp.readlines()
-                for i, line in enumerate(lines):
-                    if "begin real_lattice" in line:
-                        self.a = np.genfromtxt(lines[i+1:i+4], dtype=float)
+        if not os.path.exists(file_nnkp):
+            raise FileNotFoundError(f"nnkp file not found: {file_nnkp}")
+        with open(file_nnkp) as fp:
+            lines = fp.readlines()
+            for i, line in enumerate(lines):
+                if "begin real_lattice" in line:
+                    self.a = np.genfromtxt(lines[i+1:i+4], dtype=float)
 
                     if "begin recip_lattice" in line:
                         self.b = np.genfromtxt(lines[i+1:i+4], dtype=float)

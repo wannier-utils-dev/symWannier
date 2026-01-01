@@ -9,11 +9,13 @@ import logging
 
 from symwannier.nnkp import Nnkp
 from symwannier.sym import Sym
+from symwannier.io_utils import open_text_or_gz
 
 class Amn():
     """Reader and processor for Amn files
     Amn(k) = <psi_mk|g_n>
     """
+
     def __init__(self, file_amn, nnkp, sym = None, log=None):
         """Load Amn data from file and prepare symmetry handling.
 
@@ -35,14 +37,10 @@ class Amn():
         self.nnkp = nnkp
         self.sym = sym
 
-        if os.path.exists(file_amn):
-            with open(file_amn) as fp:
-                self._read_amn(fp)
-        elif os.path.exists(file_amn + ".gz"):
-            with gzip.open(file_amn + ".gz", 'rt') as fp:
-                self._read_amn(fp)
-        else:
-            raise Exception("failed to read amn file: " + file_amn)
+        fp, used_path = open_text_or_gz(file_amn, desc="amn file")
+        self.log.debug(f"Reading amn from {used_path}")
+        with fp:
+            self._read_amn(fp)
 
     def _read_amn(self, fp):
         """Read amn contents from an open file-like object."""

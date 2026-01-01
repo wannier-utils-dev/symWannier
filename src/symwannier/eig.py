@@ -35,7 +35,7 @@ class Eig():
             dat = dat.reshape(nk, num_bands, 3)
             eig = dat[:,:,2]
         else:
-            raise Exception("failed to read eig file: " + file_eig)
+            raise FileNotFoundError(f"eig file not found: {file_eig}")
 
         if self.sym is None:
             self.nk = nk
