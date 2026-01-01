@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 
 import numpy as np
-import os
-import gzip
 import itertools
 import logging
 
@@ -72,7 +70,11 @@ class Mmn:
         kpb_info : ndarray
             Information about k+b.
         """
-        ibz = "IBZ" in fp.readline()  # first line starts with "IBZ" when prefix_ibz.mmn
+        first_line = fp.readline()
+        if not first_line:
+            raise ValueError("Empty mmn file")
+
+        ibz = "IBZ" in first_line  # first line starts with "IBZ" when prefix_ibz.mmn
         if self.sym is not None and not ibz:
             raise Exception("Mmn is not for IBZ")
         if self.sym is None and ibz:
@@ -83,18 +85,29 @@ class Mmn:
         else:
             self.log.info("Reading mmn file")
 
-        self.num_bands, self.nks, self.nb = [ int(x) for x in fp.readline().split() ]
+        header = fp.readline()
+        if not header:
+            raise ValueError("mmn file missing header line")
+        self.num_bands, self.nks, self.nb = [ int(x) for x in header.split() ]
 
         self.mmn = np.zeros([self.nks, self.nb, self.num_bands, self.num_bands], dtype=complex)
         self.kpb_info = np.zeros([self.nks, self.nb, 5], dtype=int)
 
+        block_size = self.num_bands * self.num_bands
         for ik, ib in itertools.product(range(self.nks), range(self.nb)):
-            d = [ int(x) for x in fp.readline().split() ]
+            head = fp.readline()
+            if not head:
+                raise ValueError("mmn file ended unexpectedly while reading header")
+            d = [ int(x) for x in head.split() ]
             assert ik == d[0]-1, "{} {}".format(ik, d[0])
             self.kpb_info[ik,ib,:] = d
-            for m, n in itertools.product( range(self.num_bands), repeat=2 ):
-                dat = [ float(x) for x in fp.readline().split() ]
-                self.mmn[ik,ib,n,m] = dat[0] + 1j*dat[1]
+
+            block_lines = list(itertools.islice(fp, block_size))
+            if len(block_lines) != block_size:
+                raise ValueError("mmn file ended unexpectedly while reading data block")
+            flat = np.fromstring(" ".join(block_lines), sep=" ")
+            data = flat.reshape(self.num_bands, self.num_bands, 2)
+            self.mmn[ik,ib,:,:] = data[:,:,0].T + 1j * data[:,:,1].T
 
     def _mmn_full_klist(self):
         if self.sym is None:

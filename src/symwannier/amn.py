@@ -47,7 +47,8 @@ class Amn():
         self.log.info("Reading amn file")
         lines = fp.readlines()
         num_bands, nk, num_wann = [ int(x) for x in lines[1].split() ]
-        dat = np.genfromtxt(lines[2:]).reshape(nk, num_wann, num_bands, 5)
+        flat = np.fromstring("".join(lines[2:]), sep=" ")
+        dat = flat.reshape(nk, num_wann, num_bands, 5)
         amn = np.transpose(dat[:,:,:,3] + 1j*dat[:,:,:,4], axes=(0,2,1))
 
         self.num_bands = num_bands

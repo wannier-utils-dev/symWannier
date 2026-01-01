@@ -43,11 +43,12 @@ class Nnkp:
         """
         if not os.path.exists(file_nnkp):
             raise FileNotFoundError(f"nnkp file not found: {file_nnkp}")
-        with open(file_nnkp) as fp:
-            lines = fp.readlines()
-            for i, line in enumerate(lines):
-                if "begin real_lattice" in line:
-                    self.a = np.genfromtxt(lines[i+1:i+4], dtype=float)
+        try:
+            with open(file_nnkp) as fp:
+                lines = fp.readlines()
+                for i, line in enumerate(lines):
+                    if "begin real_lattice" in line:
+                        self.a = np.genfromtxt(lines[i+1:i+4], dtype=float)
 
                     if "begin recip_lattice" in line:
                         self.b = np.genfromtxt(lines[i+1:i+4], dtype=float)
