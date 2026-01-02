@@ -317,7 +317,6 @@ class Wannierize:
         print("  OmegaI  = {:15.10f}".format(OmegaI))
         print("  OmegaD  = {:15.10f}".format(OmegaD))
         print("  OmegaOD = {:15.10f}".format(OmegaOD))
-        print("  OmegaOD = {:15.10f}".format(OmegaOD))
 
     def calc_dw(self):
         """Compute the gradient matrix G for steepest-descent update.
