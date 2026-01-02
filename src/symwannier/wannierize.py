@@ -694,6 +694,11 @@ def main(argv=None, for_cli=False):
         help="Prioritize memory efficiency over speed (default: optimize for speed)"
     )
 
+    parser.add_argument(
+        "prefix",
+        help="Prefix name of input/output files"
+    )
+
     args = parser.parse_args(argv)
 
     wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, log_level=args.log_level)
