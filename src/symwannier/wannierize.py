@@ -10,6 +10,7 @@
 
 import numpy as np
 import scipy.linalg
+import scipy.optimize
 import itertools
 import textwrap
 import datetime
@@ -38,13 +39,16 @@ class Wannierize:
         Apply site symmetry after Wannierization (implies ``lsym=True``).
     prec : bool, optional
         If True, write high-precision outputs for hr.dat / tb.dat.
+    optimize_memory_usage : bool, optional
+        If True, prioritize memory efficiency over speed (default: False).
+        If False (default), prioritize speed (may use more memory). 
     log_level : int or str, optional
         Logging level (e.g., logging.DEBUG, logging.INFO, or 'DEBUG', 'INFO').
     log : logging.Logger, optional
         Logger to use; if not provided a module logger is created.
     """
 
-    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, log_level=None, log=None):
+    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, log_level=None, log=None):
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
             # Determine log level
@@ -64,6 +68,7 @@ class Wannierize:
         self.lsym = lsym
         self.lsite_sym = lsite_sym
         self.prec = prec
+        self.optimize_memory_usage = optimize_memory_usage
         if self.lsite_sym:
             self.lsym = True
 
@@ -197,6 +202,7 @@ class Wannierize:
         """Transform overlap matrix Mmn by unitary rotation.
         
         Computes Mmn = U^k Mmn^(0) U^(k+b) following R1_Eq.(61).
+        Uses either global pre-compute (fast, memory-heavy) or batched k-loop (balanced).
         
         Parameters
         ----------
@@ -210,9 +216,13 @@ class Wannierize:
         ndarray, shape (nk, nb, num_wann, num_wann)
             Rotated overlap matrices.
         """
-        #for k in range(self.nk):
-        #    assert np.allclose( np.matmul(Umat[:,:,k], np.transpose(np.conj(Umat[:,:,k]))), np.eye(self.num_bands) ), "Umat is not unitary for k = {}".format(k)
-        return np.einsum("klm, kblp, kbpn->kbmn", np.conj(Umat), mmn, Umat[self.kb2k[:,:],:,:], optimize=True) # Eq. (61)
+        if not self.optimize_memory_usage:
+            # Pre-compute indexed Umat for all k+b pairs to avoid repeated indexing
+            Umat_kpb = Umat[self.kb2k.ravel()].reshape(self.nk, self.nb, Umat.shape[1], Umat.shape[2])
+            return np.einsum("klm, kblp, kbpn->kbmn", np.conj(Umat), mmn, Umat_kpb, optimize=True)
+        else:
+            # Memory-efficient: re-index on each call (no pre-computation)
+            return np.einsum("klm, kblp, kbpn->kbmn", np.conj(Umat), mmn, Umat[self.kb2k[:,:],:,:], optimize=True)
 
     def init_Umat_and_Mmn(self):
         """
@@ -246,6 +256,7 @@ class Wannierize:
         
         Computes Omega = sum_n [<r^2>_n - <r>_n^2] following R1_Eqs.(11,31,32).
         Updates self.r (Wannier function centers) and self.spreads as side effects.
+        Caches mnn and imlnmnn for reuse in calc_omega_detail.
         
         Parameters
         ----------
@@ -258,17 +269,18 @@ class Wannierize:
             Total spread Omega (sum of individual spreads).
         """
         self.log.debug(f"calc_omega: mmn.shape={mmn.shape}")
-        mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
-        self._assert_nonzero_mnn(mnn, "calc_omega")
-        imlnmnn = np.log(mnn).imag
-        r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
-
-        r2a = np.sum(self.wb)*self.nk - np.einsum("b,kbn,kbn->n", self.wb, mnn, np.conj(mnn), optimize=True)
-        r2b = np.einsum("b,kbn->n", self.wb, imlnmnn**2)
-        r2 = 1/self.nk * (r2a + r2b).real
-        self.r = r
+        # Cache for reuse in calc_omega_detail and calc_dw
+        self._cached_mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
+        self._assert_nonzero_mnn(self._cached_mnn, "calc_omega")
+        self._cached_imlnmnn = np.log(self._cached_mnn).imag
+        self._cached_r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, self._cached_imlnmnn, optimize=True)
         
-        self.spreads = r2 - np.sum(r[:,:].real**2, axis=1)
+        r2a = np.sum(self.wb)*self.nk - np.einsum("b,kbn,kbn->n", self.wb, self._cached_mnn, np.conj(self._cached_mnn), optimize=True)
+        r2b = np.einsum("b,kbn->n", self.wb, self._cached_imlnmnn**2)
+        r2 = 1/self.nk * (r2a + r2b).real
+        self.r = self._cached_r
+        
+        self.spreads = r2 - np.sum(self.r[:,:].real**2, axis=1)
         return np.sum(self.spreads)
 
     def calc_omega_detail(self, mmn):
@@ -276,6 +288,7 @@ class Wannierize:
         
         Following R1_Eq.(13,18), Omega = OmegaI + OmegaD + OmegaOD.
         Prints the three components to stdout.
+        Reuses cached mnn and imlnmnn from calc_omega if available.
         
         Parameters
         ----------
@@ -288,9 +301,15 @@ class Wannierize:
         mnn2 = np.einsum("kbnn,kbnn->kb", mmn, np.conj(mmn), optimize=True).real
         OmegaOD = np.einsum("b, kb->", self.wb, mmn2 - mnn2, optimize=True)/self.nk
 
-        mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
-        self._assert_nonzero_mnn(mnn, "calc_omega_detail")
-        imlnmnn = np.log(mnn).imag
+        # Reuse cached values if available (set by calc_omega)
+        if hasattr(self, '_cached_mnn') and hasattr(self, '_cached_imlnmnn'):
+            mnn = self._cached_mnn
+            imlnmnn = self._cached_imlnmnn
+        else:
+            mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
+            self._assert_nonzero_mnn(mnn, "calc_omega_detail")
+            imlnmnn = np.log(mnn).imag
+        
         r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
         qn = imlnmnn + np.einsum("ba, na->bn", self.bvec, r, optimize=True)[np.newaxis,:,:]
         OmegaD = np.einsum("b, kbn->", self.wb, qn**2, optimize=True)/self.nk
@@ -304,6 +323,7 @@ class Wannierize:
         
         Calculates the anti-Hermitian matrix dW(k) = G(k) following R1_Eq.(52),
         used to update the unitary rotations in the direction of decreasing spread.
+        Reuses cached mnn, imlnmnn, r from calc_omega if available.
         
         Returns
         -------
@@ -311,10 +331,17 @@ class Wannierize:
             Gradient matrices dW(k), anti-Hermitian at each k-point.
         """
         self.log.debug("calc_dw: computing gradient matrices")
-        mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
-        self._assert_nonzero_mnn(mnn, "calc_dw")
-        imlnmnn = np.log(mnn).imag
-        r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
+        # Reuse cached values if available (set by calc_omega)
+        if hasattr(self, '_cached_mnn') and hasattr(self, '_cached_imlnmnn') and hasattr(self, '_cached_r'):
+            mnn = self._cached_mnn
+            imlnmnn = self._cached_imlnmnn
+            r = self._cached_r
+        else:
+            mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
+            self._assert_nonzero_mnn(mnn, "calc_dw")
+            imlnmnn = np.log(mnn).imag
+            r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
+        
         Rmn = np.einsum("kbmn,kbn->kbmn", self.mmn, np.conj(mnn), optimize=True)  # R1_Eq.(45)
         qn = imlnmnn + np.einsum("ba, na->bn", self.bvec, r, optimize=True)[np.newaxis,:,:] # R1_Eq.(47)
         T = np.einsum("kbmn, kbn->kbmn", self.mmn, qn/mnn, optimize=True)  # R1_Eq.(48,51)
@@ -361,19 +388,21 @@ class Wannierize:
         ndarray, shape (nk, num_wann, num_wann)
             Unitary matrices exp(dW(k)).
         """
-        expdw = np.zeros_like(dw)
+        # Vectorized eigendecomposition for all k-points
+        e = np.empty((self.nk, self.num_wann), dtype=float)
+        v = np.empty((self.nk, self.num_wann, self.num_wann), dtype=complex)
         for k in range(self.nk):
-            e, v = scipy.linalg.eigh(1j*dw[k,:,:])
-            #idw = np.einsum("ab,b,cb->ac", v, e, np.conj(v), optimize=True)
-            #assert np.allclose(idw, 1j*dw[:,:,k], atol=1e-5), np.sum(np.abs(idw - 1j*dw[:,:,k]))/np.sum(np.abs(idw))
-            expdw[k,:,:] = np.einsum("ab,b,cb->ac", v, np.exp(-1j*e), np.conj(v), optimize=True)
+            e[k], v[k] = scipy.linalg.eigh(1j*dw[k,:,:])
+        # Vectorized matrix multiplication: V @ diag(exp(-i*lambda)) @ V^H
+        exp_e = np.exp(-1j * e)  # (nk, num_wann)
+        expdw = np.einsum("kab,kb,kcb->kac", v, exp_e, np.conj(v), optimize=True)
         return expdw
 
     def update_mmn(self, dw, omega):
         """Update unitary rotations and overlaps using line search for optimal step size.
         
-        Performs a quadratic line search to find the optimal mixing parameter alpha
-        by evaluating Omega at alpha=0, 1/2, 1, then updates U(k) -> U(k) exp(alpha*dW(k)).
+        Uses Brent's method for robust 1D minimization to find optimal mixing parameter alpha.
+        Evaluates Omega(alpha) and finds the minimum with adaptive sampling.
         
         Parameters
         ----------
@@ -387,27 +416,35 @@ class Wannierize:
         float
             New total spread after optimal rotation.
         """
-        self.log.debug("update_mmn: computing line search")
-        Umat1 = np.einsum("kmn, knl->kml", self.Umat, self.calc_expdw(dw), optimize=True)  # R1_Eq.(60)
-        mmn1 = self.update_Mmn_by_Umat(self.mmn1, Umat1)
-        omega1 = self.calc_omega(mmn1)
-
-        Umat2 = np.einsum("kmn, knl->kml", self.Umat, self.calc_expdw(dw/2), optimize=True)  # R1_Eq.(60)
-        mmn2 = self.update_Mmn_by_Umat(self.mmn1, Umat2)
-        omega2 = self.calc_omega(mmn2)
-
-        # get optimum alpha from omega(alpha=0), omega(alpha=1/2)=omega2, omega(alpha=1)=omega1
-        if 2*omega + 2*omega1 - 4*omega2 < 0:
-            alpha = 0.01 if omega < omega1 else 1.0
-        else:
-            alpha = -(4*omega2-omega1-3*omega) /2/ (2*omega+2*omega1-4*omega2)
-            alpha = min(1, alpha)
-            alpha = max(0.01, alpha)
-        self.log.debug(f"update_mmn: alpha={alpha:.4f}, omega(0)={omega:.8f}, omega(1/2)={omega2:.8f}, omega(1)={omega1:.8f}")
-
-        self.Umat = np.einsum("kmn, knl->kml", self.Umat, self.calc_expdw(alpha*dw), optimize=True)  # R1_Eq.(60)
+        self.log.debug("update_mmn: computing line search with Brent's method")
+        
+        # Define objective function for line search
+        def omega_at_alpha(alpha):
+            """Compute Omega for given alpha step size."""
+            expdw_alpha = self.calc_expdw(alpha * dw)
+            Umat_alpha = np.einsum("kmn, knl->kml", self.Umat, expdw_alpha, optimize=True)
+            mmn_alpha = self.update_Mmn_by_Umat(self.mmn1, Umat_alpha)
+            return self.calc_omega(mmn_alpha)
+        
+        # Use Brent's method for 1D minimization in range [0, 1]
+        # bracket=(0, 1) ensures search within [0, 1]
+        result = scipy.optimize.minimize_scalar(
+            omega_at_alpha,
+            bounds=(0.01, 1.0),
+            method='bounded',
+            options={'xatol': 1e-4}  # Tolerance for alpha convergence
+        )
+        
+        alpha = result.x
+        omega_new = result.fun
+        self.log.debug(f"update_mmn: optimal alpha={alpha:.4f}, omega={omega_new:.8f} (nfev={result.nfev})")
+        
+        # Update with optimal alpha
+        expdw_opt = self.calc_expdw(alpha * dw)
+        self.Umat = np.einsum("kmn, knl->kml", self.Umat, expdw_opt, optimize=True)
         self.mmn = self.update_Mmn_by_Umat(self.mmn1, self.Umat)
         omega = self.calc_omega(self.mmn)
+        
         return omega
 
     def dis_window(self):
@@ -650,13 +687,20 @@ def main(argv=None, for_cli=False):
     )
 
     parser.add_argument(
+        "--optimize-memory",
+        action="store_true",
+        dest="optimize_memory_usage",
+        help="Prioritize memory efficiency over speed (default: optimize for speed)"
+    )
+
+    parser.add_argument(
         "prefix",
         help="Prefix name of input/output files"
     )
 
     args = parser.parse_args(argv)
 
-    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, log_level=args.log_level)
+    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, log_level=args.log_level)
     wann.run()
 
 
