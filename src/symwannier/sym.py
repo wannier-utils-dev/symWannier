@@ -104,6 +104,18 @@ class Sym:
                     d = fp.readline().split()
                     rotmat[ isym, int(d[0])-1, int(d[1])-1 ] = float(d[2]) + 1j * float(d[3])
 
+            # optional: Wannier centers (crystal coords)
+            centers = None
+            mark = fp.readline()
+            while mark and mark.strip() == '':
+                mark = fp.readline()
+
+            if mark and mark.strip().lower().startswith('wannier centers'):
+                num_centers = int(fp.readline().strip())
+                centers = np.zeros((num_centers, 3), dtype=float)
+                for ic in range(num_centers):
+                    centers[ic, :] = [float(x) for x in fp.readline().split()]
+
             self.nsym = nsym
             self.s = s
             self.ft = ft
@@ -115,6 +127,7 @@ class Sym:
             self.nbnd = nbnd
             self.repmat = repmat
             self.rotmat = rotmat
+            self.centers = centers
 
             self._repmat_rescale()
 
