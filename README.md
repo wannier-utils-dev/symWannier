@@ -14,6 +14,20 @@ You can install this package using pip:
 pip install symWannier
 ```
 
+## Development
+
+GitHub Actions workflows are configured as follows:
+
+- `CI`: runs on every push and pull request, installs the package in editable mode, runs the test suite, and verifies the source distribution and wheel can be built.
+- `Release`: runs when a tag matching `v*` is pushed, builds the package, validates the artifacts, and uploads them to a GitHub Release.
+
+To create a release with the workflow, push a version tag such as:
+
+```
+git tag v1.1.0
+git push origin v1.1.0
+```
+
 ## IBZ calculation using wannier90
 
 Run SCF and NSCF calculations to obtain wave functions in the irreducible Brillouin zone (IBZ).
@@ -71,4 +85,3 @@ For more information, please see
 [T. Koretsune, Comp. Phys. Comm. 285 108645 (2023).](https://doi.org/10.1016/j.cpc.2022.108645)
 
 We hope that you cite this reference when you publish the results using this code.
-

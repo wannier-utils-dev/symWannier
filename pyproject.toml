@@ -10,7 +10,7 @@ readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
 {name = "Takashi Koretsune", email = "koretsune@cmpt.phys.tohoku.ac.jp"}
 ]
-license = {text = "GPLv2"}
+license = "GPL-2.0-only"
 dependencies = [
 	"requests",
 	"numpy",
@@ -18,7 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = [
+	"build",
+	"pytest",
+	"twine",
+]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
