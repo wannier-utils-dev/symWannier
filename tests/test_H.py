@@ -1,3 +1,9 @@
+"""水素系入力の読み込みと Wannier 化を検証する統合テスト群。
+
+個別ファイルパーサーの挙動、対称性を使った全 BZ への展開、
+`Wannierize` の初期化と実行結果を一通り確認する。
+"""
+
 import numpy as np
 import pytest
 
@@ -11,7 +17,11 @@ from symwannier.wannierize import Wannierize
 
 
 def test_nnkp_parsing(test_data_dir):
-    """Test parsing of H.nnkp file."""
+    """`H.nnkp` の基本情報が正しく読み込まれることを確認する。
+
+    k 点数、近接ベクトル数、Wannier 関数数、配列形状に加え、
+    先頭 k 点が Gamma 点であることを検証する。
+    """
     nnkp_file = test_data_dir / "H.nnkp"
     nnkp = Nnkp(str(nnkp_file))
 
@@ -25,7 +35,10 @@ def test_nnkp_parsing(test_data_dir):
 
 
 def test_eig_parsing(test_data_dir):
-    """Test parsing of H.ieig file."""
+    """`H.ieig` の固有値データが期待する形で読み込まれることを確認する。
+
+    IBZ 上の k 点数、バンド数、固有値配列の形状を検証する。
+    """
     eig_file = test_data_dir / "H.ieig"
     eig = Eig(str(eig_file))
 
@@ -35,7 +48,11 @@ def test_eig_parsing(test_data_dir):
 
 
 def test_mmn_parsing_with_symmetry(test_data_dir):
-    """Test parsing of H.immn file (IBZ Mmn)."""
+    """`H.immn` が対称操作を使って全 BZ に展開されることを確認する。
+
+    `H.isym` と `H.nnkp` を併用して Mmn を構築し、展開後の k 点数、
+    近接数、行列配列形状、`kb2k` 対応表の形状を検証する。
+    """
     mmn_file = test_data_dir / "H.immn"
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
@@ -54,7 +71,11 @@ def test_mmn_parsing_with_symmetry(test_data_dir):
 
 
 def test_amn_parsing_with_symmetry(test_data_dir):
-    """Test parsing of H.iamn file and Umat generation."""
+    """`H.iamn` の全 BZ 展開と `Umat()` の性質を確認する。
+
+    対称性込みで展開した Amn の配列形状を確認し、生成した `Umat`
+    が各 k 点でユニタリになることを検証する。
+    """
     amn_file = test_data_dir / "H.iamn"
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
@@ -77,7 +98,11 @@ def test_amn_parsing_with_symmetry(test_data_dir):
 
 
 def test_sym_parsing(test_data_dir):
-    """Test parsing of H.isym symmetry file."""
+    """`H.isym` に含まれる対称操作情報の読み込み結果を確認する。
+
+    対称操作数、既約 k 点数、全 k 点数、バンド数、
+    および対称行列配列の形状を検証する。
+    """
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
     nnkp = Nnkp(str(nnkp_file))
@@ -94,7 +119,10 @@ def test_sym_parsing(test_data_dir):
 
 
 def test_win_parsing(test_data_dir):
-    """Test parsing of H.win file."""
+    """`H.win` の主要設定値が正しく読み込まれることを確認する。
+
+    Wannier 関数数、反復回数、`mp_grid` 属性の有無を検証する。
+    """
     prefix = str(test_data_dir / "H")
     win = Win(prefix)
     
@@ -104,7 +132,11 @@ def test_win_parsing(test_data_dir):
 
 
 def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
-    """Test Wannierize class initialization with symmetry."""
+    """対称性を有効にした `Wannierize` 初期化時の内部状態を確認する。
+
+    入力ファイルを一時ディレクトリへコピーして初期化を行い、
+    格子点数、近接数、対称性フラグ、内部配列形状を検証する。
+    """
     copy_inputs("H", tmp_path)
 
     cwd = __import__("os").getcwd()
@@ -128,7 +160,11 @@ def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
 
 
 def test_wannierize_run_basic(run_wannier):
-    """Test basic Wannierize.run() execution for H inputs."""
+    """H 入力に対する `Wannierize.run()` の実行結果を確認する。
+
+    出力ファイル生成、spread と中心座標の配列生成、
+    単一 Wannier 関数に対する総 spread と中心位置の一致を検証する。
+    """
     wann, workdir = run_wannier("H", lsym=True, num_iter=2)
 
     # Check output files were created

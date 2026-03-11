@@ -1,9 +1,19 @@
+"""Sn 系入力に対する Wannier 化の回帰テスト。
+
+出力ファイルの生成に加え、Wannier 関数の広がりと中心座標、
+および総 spread が参照値と一致することを確認する。
+"""
+
 import numpy as np
 import pytest
 
 
 def test_wannierize_sn(run_wannier):
-    """Run Wannierize on Sn inputs and validate against reference output."""
+    """Sn 入力での Wannier 化結果が参照データと一致することを確認する。
+
+    `Sn_py_hr.dat` と `Sn_py_tb.dat` の生成を確認し、8 個の
+    Wannier 関数に対する spread、中心座標、総 spread を検証する。
+    """
     wann, workdir = run_wannier("Sn", lsym=True)
 
     # Output files

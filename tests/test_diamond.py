@@ -1,10 +1,20 @@
+"""ダイヤモンド構造入力に対する Wannier 化の回帰テスト。
+
+Wannier 化の実行後に生成される出力ファイルと、
+4 個の Wannier 関数に対する広がり・中心座標の参照一致を確認する。
+"""
+
 import numpy as np
 import pytest
 from symwannier.wannierize import Wannierize
 
 
 def test_wannierize_diamond_basic(run_wannier):
-    """Run wannierization for diamond inputs and check reported spreads/centers."""
+    """ダイヤモンド入力での Wannier 化が期待どおり収束することを確認する。
+
+    `diamond_py_hr.dat` と `diamond_py_tb.dat` の生成を確認し、
+    spread、中心座標、総 spread が参照値に一致するかを検証する。
+    """
     wann, workdir = run_wannier("diamond", lsym=True)
 
     # Files written
@@ -29,4 +39,3 @@ def test_wannierize_diamond_basic(run_wannier):
 
     omega_tot = np.sum(wann.spreads)
     assert np.isclose(omega_tot, 2.33178448, rtol=1e-6)
-

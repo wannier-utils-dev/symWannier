@@ -1,10 +1,20 @@
+"""グラフェン入力に対する Wannier 化の回帰テスト。
+
+出力ファイル生成と 5 個の Wannier 関数の広がり・中心座標を
+参照値と比較し、総 spread も含めて再現性を確認する。
+"""
+
 import numpy as np
 import pytest
 from symwannier.wannierize import Wannierize
 
 
 def test_wannierize_graphene_runs(run_wannier):
-    """Run Wannierize on graphene inputs and validate against reference output."""
+    """グラフェン入力での Wannier 化結果が期待値どおりかを検証する。
+
+    出力ファイルの生成、spread 配列と中心座標の形状、
+    参照計算に基づく各値および総 spread の一致を確認する。
+    """
     wann, workdir = run_wannier("graphene", lsym=True)
 
     # Output files should be written
@@ -28,4 +38,3 @@ def test_wannierize_graphene_runs(run_wannier):
 
     omega_tot = np.sum(wann.spreads)
     assert np.isclose(omega_tot, 3.65605461, rtol=1e-6)
-
