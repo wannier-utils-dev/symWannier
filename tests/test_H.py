@@ -1,7 +1,8 @@
-"""水素系入力の読み込みと Wannier 化を検証する統合テスト群。
+"""Integration tests for parsing and wannierizing the hydrogen inputs.
 
-個別ファイルパーサーの挙動、対称性を使った全 BZ への展開、
-`Wannierize` の初期化と実行結果を一通り確認する。
+These checks cover the individual file parsers, symmetry-based expansion to the
+full Brillouin zone, and the initialization and execution paths of
+`Wannierize`.
 """
 
 import numpy as np
@@ -17,10 +18,10 @@ from symwannier.wannierize import Wannierize
 
 
 def test_nnkp_parsing(test_data_dir):
-    """`H.nnkp` の基本情報が正しく読み込まれることを確認する。
+    """Check that the basic metadata in `H.nnkp` is parsed correctly.
 
-    k 点数、近接ベクトル数、Wannier 関数数、配列形状に加え、
-    先頭 k 点が Gamma 点であることを検証する。
+    The test verifies the number of k-points, neighbor vectors, Wannier
+    functions, array shapes, and that the first k-point is Gamma.
     """
     nnkp_file = test_data_dir / "H.nnkp"
     nnkp = Nnkp(str(nnkp_file))
@@ -35,9 +36,10 @@ def test_nnkp_parsing(test_data_dir):
 
 
 def test_eig_parsing(test_data_dir):
-    """`H.ieig` の固有値データが期待する形で読み込まれることを確認する。
+    """Check that the eigenvalue data in `H.ieig` is read as expected.
 
-    IBZ 上の k 点数、バンド数、固有値配列の形状を検証する。
+    This verifies the number of irreducible-zone k-points, the band count, and
+    the shape of the eigenvalue array.
     """
     eig_file = test_data_dir / "H.ieig"
     eig = Eig(str(eig_file))
@@ -48,10 +50,10 @@ def test_eig_parsing(test_data_dir):
 
 
 def test_mmn_parsing_with_symmetry(test_data_dir):
-    """`H.immn` が対称操作を使って全 BZ に展開されることを確認する。
+    """Check that `H.immn` expands to the full BZ using symmetry operations.
 
-    `H.isym` と `H.nnkp` を併用して Mmn を構築し、展開後の k 点数、
-    近接数、行列配列形状、`kb2k` 対応表の形状を検証する。
+    The test builds `Mmn` with `H.isym` and `H.nnkp`, then verifies the expanded
+    k-point count, neighbor count, matrix shape, and `kb2k` mapping shape.
     """
     mmn_file = test_data_dir / "H.immn"
     isym_file = test_data_dir / "H.isym"
@@ -71,10 +73,10 @@ def test_mmn_parsing_with_symmetry(test_data_dir):
 
 
 def test_amn_parsing_with_symmetry(test_data_dir):
-    """`H.iamn` の全 BZ 展開と `Umat()` の性質を確認する。
+    """Check full-BZ expansion of `H.iamn` and the properties of `Umat()`.
 
-    対称性込みで展開した Amn の配列形状を確認し、生成した `Umat`
-    が各 k 点でユニタリになることを検証する。
+    This verifies the shape of the symmetry-expanded AMN array and confirms
+    that the generated `Umat` is unitary at every k-point.
     """
     amn_file = test_data_dir / "H.iamn"
     isym_file = test_data_dir / "H.isym"
@@ -98,10 +100,10 @@ def test_amn_parsing_with_symmetry(test_data_dir):
 
 
 def test_sym_parsing(test_data_dir):
-    """`H.isym` に含まれる対称操作情報の読み込み結果を確認する。
+    """Check the symmetry information loaded from `H.isym`.
 
-    対称操作数、既約 k 点数、全 k 点数、バンド数、
-    および対称行列配列の形状を検証する。
+    The test verifies the number of symmetry operations, irreducible and full
+    k-points, band count, and the shape of the symmetry-matrix array.
     """
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
@@ -119,9 +121,10 @@ def test_sym_parsing(test_data_dir):
 
 
 def test_win_parsing(test_data_dir):
-    """`H.win` の主要設定値が正しく読み込まれることを確認する。
+    """Check that the main settings in `H.win` are parsed correctly.
 
-    Wannier 関数数、反復回数、`mp_grid` 属性の有無を検証する。
+    This covers the number of Wannier functions, the iteration count, and the
+    presence of the `mp_grid` attribute.
     """
     prefix = str(test_data_dir / "H")
     win = Win(prefix)
@@ -132,10 +135,11 @@ def test_win_parsing(test_data_dir):
 
 
 def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
-    """対称性を有効にした `Wannierize` 初期化時の内部状態を確認する。
+    """Check the internal state after initializing `Wannierize` with symmetry.
 
-    入力ファイルを一時ディレクトリへコピーして初期化を行い、
-    格子点数、近接数、対称性フラグ、内部配列形状を検証する。
+    The test copies the input files into a temporary directory, initializes the
+    solver, and verifies grid sizes, neighbor count, symmetry flags, and key
+    internal array shapes.
     """
     copy_inputs("H", tmp_path)
 
@@ -160,10 +164,10 @@ def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
 
 
 def test_wannierize_run_basic(run_wannier):
-    """H 入力に対する `Wannierize.run()` の実行結果を確認する。
+    """Check the result of running `Wannierize.run()` for the H input.
 
-    出力ファイル生成、spread と中心座標の配列生成、
-    単一 Wannier 関数に対する総 spread と中心位置の一致を検証する。
+    This verifies output file creation, the spread and center arrays, and the
+    expected total spread and center position for the single Wannier function.
     """
     wann, workdir = run_wannier("H", lsym=True, num_iter=2)
 

@@ -1,18 +1,18 @@
-"""Fe SW+PD ケース向けの回帰テスト。
+"""Regression tests for the Fe SW+PD case.
 
-このファイルでは、`symwan_proj` から取り込んだ Fe の `SW+PD`
-(`irr_bz + atom_proj + projectability disentanglement`) ケースを、
-`symWannier` 側で継続的に検証する。
+This file exercises the Fe `SW+PD` case imported from `symwan_proj`:
+`irr_bz + atom_proj + projectability disentanglement`.
 
-確認したい観点は大きく 4 つある。
+The main checks are:
 
-1. 静的入力のサイズやヘッダーが壊れていないこと
-2. projectability から作る disentanglement window が期待どおりであること
-3. `iamn` の little-group 共変性と、そこから作る U 行列のユニタリ性が保たれること
-4. `-P -S` の end-to-end 実行が数値的に破綻しないこと
+1. Static input sizes and headers remain intact.
+2. The disentanglement windows derived from projectability remain stable.
+3. The `iamn` data preserves little-group covariance and yields unitary
+   U matrices.
+4. The `-P -S` end-to-end run remains numerically healthy.
 
-既存の小規模テストでは拾いにくい、`atom_proj + irr_bz` 経路の回帰を
-補うのが目的である。
+The goal is to cover regressions in the `atom_proj + irr_bz` path that are
+hard to catch with the smaller legacy tests.
 """
 
 from __future__ import annotations
@@ -32,15 +32,15 @@ from symwannier.sym import Sym
 
 
 def _prefix(test_data_dir: Path) -> Path:
-    """Fe SW+PD 入力群の共通 prefix を返す。"""
+    """Return the shared prefix for the Fe SW+PD input set."""
     return test_data_dir / "fe_sw_pd"
 
 
 def _iamn_header(path: Path) -> tuple[int, int, int]:
-    """`.iamn` ヘッダー 2 行目から `(num_bands, nks, nproj)` を読む。
+    """Read `(num_bands, nks, nproj)` from the second line of an `.iamn` file.
 
-    平文と `.gz` の両方に対応しておき、テストデータの持ち方を変えても
-    同じ helper を使えるようにする。
+    The helper supports both plain-text and `.gz` inputs so the tests keep
+    working if the storage format changes.
     """
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8") as fp:
@@ -49,10 +49,10 @@ def _iamn_header(path: Path) -> tuple[int, int, int]:
 
 
 def _svd_umat(amn_data: np.ndarray) -> np.ndarray:
-    """AMN から各 k 点の初期 U 行列を SVD で構成する。
+    """Build the initial U matrix at each k-point from AMN via SVD.
 
-    `Amn.Umat()` の内部で使っている初期化と同じ発想を、
-    テスト側から段階的に検証できるよう切り出している。
+    This mirrors the initialization logic used inside `Amn.Umat()`, but keeps
+    it explicit so the tests can inspect each stage separately.
     """
     nk, num_bands, num_wann = amn_data.shape
     umat = np.zeros((nk, num_bands, num_wann), dtype=complex)
@@ -63,10 +63,10 @@ def _svd_umat(amn_data: np.ndarray) -> np.ndarray:
 
 
 def _unitarity_error(umat: np.ndarray) -> tuple[float, float]:
-    """U 行列集合のユニタリ誤差を `(max, mean)` で返す。
+    """Return the unitary error of a U-matrix set as `(max, mean)`.
 
-    各 k 点で `U^dagger U - I` のノルムを計算し、
-    対称化の各段階でユニタリ性が崩れていないかを見る。
+    For each k-point, this computes the norm of `U^dagger U - I` and is used to
+    check that unitarity is preserved through the symmetrization stages.
     """
     errs = []
     for k in range(umat.shape[0]):
@@ -76,11 +76,11 @@ def _unitarity_error(umat: np.ndarray) -> tuple[float, float]:
 
 
 def _little_group_covariance_stats(prefix: Path) -> tuple[float, float, float]:
-    """raw `iamn` の little-group 共変残差を統計量で返す。
+    """Return `(mean, p95, max)` residuals for little-group covariance of `iamn`.
 
-    既約 k 点 `k` を little-group で写したときに、
-    `repmat`、Wannier 側回転行列、位相因子を通した AMN が元の AMN に
-    戻るかを確認する。返り値は `(mean, p95, max)`。
+    For each irreducible k-point, the test applies the little-group operation
+    through `repmat`, the Wannier-side rotation matrix, and the phase factor,
+    then measures how closely the transformed AMN returns to the original data.
     """
     nnkp = Nnkp(str(prefix) + ".nnkp")
     sym = Sym(str(prefix) + ".isym", nnkp=nnkp)
@@ -118,13 +118,11 @@ def _little_group_covariance_stats(prefix: Path) -> tuple[float, float, float]:
 
 
 def test_fe_sw_pd_static_inputs(test_data_dir):
-    """静的入力の基本メタデータを回帰固定する。
+    """Lock down the basic metadata of the static Fe SW+PD inputs.
 
-    ここではファイルの物理量そのものではなく、
-    取り込みの前提になる配列サイズとヘッダー値を確認する。
-    `nk/nks/nsym/num_bands/num_wann` がずれると、
-    以降の対称化や disentanglement の失敗原因が切り分けにくくなるため、
-    まず最初にこのテストで壊れを止める。
+    This test focuses on array sizes and header values rather than physical
+    observables. If `nk`, `nks`, `nsym`, `num_bands`, or `num_wann` drift, later
+    symmetry and disentanglement failures become much harder to diagnose.
     """
     prefix = _prefix(test_data_dir)
     nnkp = Nnkp(str(prefix) + ".nnkp")
@@ -147,18 +145,15 @@ def test_fe_sw_pd_static_inputs(test_data_dir):
 
 
 def test_fe_sw_pd_projectability_windows(copy_inputs, tmp_path):
-    """projectability ベース window の自動決定結果を固定する。
+    """Lock down the automatically chosen projectability-based windows.
 
-    取り込み対象の Python 側変更の中心は、
-    `dis_window_projectability()` が各 k 点の projectability を見て
-    `inner/outer` window を決める部分にある。
-    そのため、このテストでは
+    The main Python-side change imported for this case sits in
+    `dis_window_projectability()`, where the inner and outer windows are chosen
+    from the projectability at each k-point. This test therefore checks:
 
-    - projectability に NaN/inf/負値がないこと
-    - 最大値が期待したレンジにあること
-    - `ndimfroz` と `ndimwin` の min/max/mean が変わっていないこと
-
-    を直接チェックする。
+    - projectability contains no NaN, inf, or negative values
+    - the maximum projectability stays in the expected range
+    - the min, max, and mean of `ndimfroz` and `ndimwin` remain unchanged
     """
     from symwannier.wannierize import Wannierize
 
@@ -185,12 +180,11 @@ def test_fe_sw_pd_projectability_windows(copy_inputs, tmp_path):
 
 
 def test_fe_sw_pd_iamn_little_group_covariance(test_data_dir):
-    """raw `iamn` が little-group 共変性を高精度に満たすことを確認する。
+    """Check that raw `iamn` satisfies little-group covariance to high accuracy.
 
-    このケースでは `iamn` 自体が対称性情報の質をかなり直接反映する。
-    そのため、mean/p95/max の残差を十分小さく抑えることで、
-    `atom_proj + irr_bz` 経路で生成された入力が Python 側でも
-    整合して読めていることを確認する。
+    In this case, `iamn` reflects the symmetry quality quite directly. Keeping
+    the mean, p95, and max residuals very small confirms that the
+    `atom_proj + irr_bz` inputs are read consistently on the Python side.
     """
     mean_r, p95_r, max_r = _little_group_covariance_stats(_prefix(test_data_dir))
     assert mean_r < 1e-6
@@ -199,17 +193,17 @@ def test_fe_sw_pd_iamn_little_group_covariance(test_data_dir):
 
 
 def test_fe_sw_pd_symmetrized_umat_is_unitary(test_data_dir):
-    """SVD と対称化の各段階で U 行列のユニタリ性が崩れないことを確認する。
+    """Check that U-matrix unitarity survives each SVD and symmetrization step.
 
-    段階を分けて
+    The test records the error after:
 
-    - raw SVD 直後
-    - irreducible k 点だけを抜き出した後
-    - `symmetrize_Gk()` 後
-    - `symmetrize_expand()` 後
+    - the raw SVD
+    - selecting only irreducible k-points
+    - `symmetrize_Gk()`
+    - `symmetrize_expand()`
 
-    の誤差を見ておくと、将来崩れた場合に
-    「どの段階で壊れたか」をこのテストだけで判断しやすい。
+    Keeping these stages separate makes it easier to pinpoint where a future
+    regression first breaks unitarity.
     """
     prefix = _prefix(test_data_dir)
     nnkp = Nnkp(str(prefix) + ".nnkp")
@@ -235,17 +229,17 @@ def test_fe_sw_pd_symmetrized_umat_is_unitary(test_data_dir):
 
 @pytest.mark.slow
 def test_fe_sw_pd_full_run_regression(run_wannier):
-    """`-P -S` の end-to-end 実行が数値的に健全であることを確認する。
+    """Check that the `-P -S` end-to-end run stays numerically healthy.
 
-    archived log の厳密一致ではなく、現行コードで再計算した結果が
-    少なくとも次を満たすことを slow テストで確認する。
+    Rather than requiring an exact match to an archived log, this slow test
+    checks that the current code still satisfies the basic health conditions:
 
-    - `hr/tb` 出力が生成される
-    - `spreads` と中心座標が有限値である
-    - 最大 spread が明らかな外れ値になっていない
-    - 中心座標が不自然に大きくずれていない
+    - `hr/tb` outputs are generated
+    - `spreads` and centers are finite
+    - the maximum spread is not an obvious outlier
+    - the centers do not drift to unphysical values
 
-    これにより、Fe SW+PD の重い経路を CI でも最低限監視できる。
+    This gives CI at least a basic guardrail for the heavy Fe SW+PD path.
     """
     wann, workdir = run_wannier(
         "fe_sw_pd",

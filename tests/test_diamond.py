@@ -1,7 +1,7 @@
-"""ダイヤモンド構造入力に対する Wannier 化の回帰テスト。
+"""Regression test for wannierization on the diamond input.
 
-Wannier 化の実行後に生成される出力ファイルと、
-4 個の Wannier 関数に対する広がり・中心座標の参照一致を確認する。
+The test checks the generated output files and the reference spreads and
+centers for the four Wannier functions.
 """
 
 import numpy as np
@@ -10,10 +10,10 @@ from symwannier.wannierize import Wannierize
 
 
 def test_wannierize_diamond_basic(run_wannier):
-    """ダイヤモンド入力での Wannier 化が期待どおり収束することを確認する。
+    """Check that wannierization of the diamond input converges as expected.
 
-    `diamond_py_hr.dat` と `diamond_py_tb.dat` の生成を確認し、
-    spread、中心座標、総 spread が参照値に一致するかを検証する。
+    This verifies creation of `diamond_py_hr.dat` and `diamond_py_tb.dat`, and
+    checks the spreads, centers, and total spread against reference values.
     """
     wann, workdir = run_wannier("diamond", lsym=True)
 

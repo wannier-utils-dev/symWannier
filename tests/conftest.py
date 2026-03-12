@@ -1,5 +1,6 @@
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -7,10 +8,38 @@ import pytest
 from symwannier.wannierize import Wannierize
 
 
+def _preferred_tmp_root() -> Path | None:
+    configured = os.environ.get("SYMWANNIER_PYTEST_BASETEMP")
+    if configured:
+        return Path(configured).expanduser()
+
+    candidate = Path("/home2") / os.environ.get("USER", "") / "tmp" / "pytest"
+    if candidate.parent.exists() and os.access(candidate.parent, os.W_OK):
+        return candidate
+
+    return None
+
+
 @pytest.fixture
 def test_data_dir():
     """Path to bundled test input files."""
     return Path(__file__).parent / "inputs"
+
+
+@pytest.fixture
+def tmp_path(tmp_path_factory):
+    """Create per-test work directories with a local fast-storage override."""
+    preferred_root = _preferred_tmp_root()
+    if preferred_root is None:
+        yield tmp_path_factory.mktemp("test")
+        return
+
+    preferred_root.mkdir(parents=True, exist_ok=True)
+    path = Path(tempfile.mkdtemp(prefix="pytest-", dir=preferred_root))
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 @pytest.fixture

@@ -32,7 +32,6 @@ where = ["src"]
 include = ["symwannier"]
 
 [tool.pytest.ini_options]
-addopts = "--basetemp=/home2/hirotosaito/tmp/pytest"
 markers = [
 	"slow: long-running regression tests for large workflow cases",
 ]
