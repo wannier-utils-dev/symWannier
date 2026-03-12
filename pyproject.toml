@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "symWannier"
 version = "1.1.0"
 description = "A python package for computing symmetry adapted Wannier functions with irreducible BZ"
+requires-python = ">=3.11"
 readme = { file = "README.md", content-type = "text/markdown" }
 authors = [
 {name = "Takashi Koretsune", email = "koretsune@cmpt.phys.tohoku.ac.jp"}

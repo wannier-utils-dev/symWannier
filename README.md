@@ -21,6 +21,7 @@ pip install -e '.[dev]'
 ```
 
 This installs the Python package and the `symwannier` CLI from the current source tree.
+The current supported Python versions are 3.11 and newer.
 
 If you only want the published Python package and do not need this repository checkout,
 you can instead use:
