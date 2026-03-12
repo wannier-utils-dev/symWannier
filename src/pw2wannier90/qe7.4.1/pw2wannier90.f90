@@ -507,7 +507,6 @@ module atproj
    INTEGER, PARAMETER :: nexatproj_max = 2000 ! max allowed number of projectors to be excluded
    INTEGER :: atom_proj_exclude(nexatproj_max) ! index starts from 1
    LOGICAL :: atom_proj_ortho ! whether perform Lowdin orthonormalization
-   LOGICAL :: atom_proj_sym ! whether perform symmetrization
 
    ! atomic proj internal variables, using *atproj*
    INTEGER :: nexatproj ! actual number of excluded projectors
@@ -918,7 +917,7 @@ PROGRAM pw2wannier90
   USE environment,ONLY : environment_start, environment_end
   USE wannier
   use atproj, only : atom_proj, atom_proj_dir, atom_proj_ext, &
-                     atom_proj_exclude, atom_proj_ortho, atom_proj_sym
+                     atom_proj_exclude, atom_proj_ortho
   USE read_namelists_module, only : check_namelist_read
   !
   IMPLICIT NONE
@@ -1008,9 +1007,6 @@ PROGRAM pw2wannier90
      atom_proj_ext = .false.
      atom_proj_ortho = .true.
      atom_proj_exclude = -1
-     ! Haven't tested symmetrization with external projectors, disable it for now
-     atom_proj_sym = .false.
-     !
      !     reading the namelist inputpp
      !
      READ (5, inputpp, iostat=ios)
@@ -1065,7 +1061,6 @@ PROGRAM pw2wannier90
   CALL mp_bcast(atom_proj_dir, ionode_id, world_comm)
   CALL mp_bcast(atom_proj_ext,ionode_id, world_comm)
   CALL mp_bcast(atom_proj_ortho, ionode_id, world_comm)
-  CALL mp_bcast(atom_proj_sym, ionode_id, world_comm)
   CALL mp_bcast(atom_proj_exclude, ionode_id, world_comm)
   !
   ! Check: kpoint distribution with pools in library mode not implemented
@@ -1936,8 +1931,6 @@ SUBROUTINE read_nnkp
               'See Wannier90 User Guide in the auto_projections section for clarifications.', 1 )
            ENDIF
         ELSE IF (atom_proj) THEN
-           DEALLOCATE(center_w, l_w, mr_w, zaxis, xaxis)
-           ALLOCATE(center_w(3,n_wannier), l_w(n_wannier), mr_w(n_wannier), zaxis(3,n_wannier), xaxis(3,n_wannier), stat=ierr)
            continue
         ELSE
            ! Fire an error whether or not a projections block is found
@@ -1960,6 +1953,24 @@ SUBROUTINE read_nnkp
 
   ! Broadcast
   CALL mp_bcast(n_wannier,ionode_id, world_comm)
+  IF (atom_proj) THEN
+     IF (ALLOCATED(center_w)) DEALLOCATE (center_w)
+     IF (ALLOCATED(l_w)) DEALLOCATE (l_w)
+     IF (ALLOCATED(mr_w)) DEALLOCATE (mr_w)
+     IF (ALLOCATED(zaxis)) DEALLOCATE (zaxis)
+     IF (ALLOCATED(xaxis)) DEALLOCATE (xaxis)
+     ALLOCATE(center_w(3,n_wannier), l_w(n_wannier), mr_w(n_wannier), zaxis(3,n_wannier), xaxis(3,n_wannier), stat=ierr)
+  ENDIF
+  IF (atom_proj .AND. noncolin) THEN
+     IF (ALLOCATED(spin_eig)) DEALLOCATE(spin_eig)
+     IF (ALLOCATED(spin_qaxis)) DEALLOCATE(spin_qaxis)
+     ALLOCATE(spin_eig(n_wannier))
+     ALLOCATE(spin_qaxis(3,n_wannier))
+     DO iw = 1, n_wannier
+        spin_eig(iw) = 1
+        spin_qaxis(:,iw) = (/ 0.d0, 0.d0, 1.d0 /)
+     END DO
+  END IF
   CALL mp_bcast(center_w,ionode_id, world_comm)
   CALL mp_bcast(l_w,ionode_id, world_comm)
   CALL mp_bcast(mr_w,ionode_id, world_comm)
@@ -3754,6 +3765,7 @@ SUBROUTINE compute_mmn_ibz
       USE constants,       ONLY : tpi
       USE wannier,         ONLY : n_wannier, l_w, mr_w, xaxis, zaxis, center_w, &
                                   spin_eig, spin_qaxis
+      USE atproj,          ONLY : atom_proj, atom_proj_ext
       USE symm_base,       ONLY : d1, d2, d3, nsym
       !
       COMPLEX(DP), INTENT(OUT) :: rotmat(n_wannier, n_wannier, nsym2)
@@ -3799,7 +3811,7 @@ SUBROUTINE compute_mmn_ibz
       REAL(DP)              :: dvec(3,32), dvec_in(3,32), dwgt(32), dylm1(32), dylm2(32)
       COMPLEX(DP)           :: spin1(2), spin2(2), u_spin(2,2)
       INTEGER, ALLOCATABLE  :: ip2iw(:), iw2ip(:), ips2p(:,:)
-      REAL(DP), ALLOCATABLE :: vaxis(:,:,:)
+      REAL(DP), ALLOCATABLE :: vaxis(:,:,:), proj_sign(:)
       logical, ALLOCATABLE  :: lfound(:)
       COMPLEX(DP), ALLOCATABLE :: check_mat(:,:)
       INTEGER               :: l, m1, m2
@@ -3871,6 +3883,17 @@ SUBROUTINE compute_mmn_ibz
       !
       allocate( vaxis(3,3,n_wannier), stat=ierr)
       IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating vaxis', 1)
+      allocate( proj_sign(n_wannier), stat=ierr)
+      IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating proj_sign', 1)
+      proj_sign = 1.0_DP
+      IF (atom_proj .AND. (.NOT. atom_proj_ext)) THEN
+         DO iw = 1, n_wannier
+            ! Keep ordinary atom_proj AMN unchanged and absorb the
+            ! phase-convention mismatch only in symmetry rotmat.
+            IF (l_w(iw) == 1 .AND. mr_w(iw) == 1) proj_sign(iw) = -1.0_DP
+            IF (l_w(iw) == 2 .AND. (mr_w(iw) == 2 .OR. mr_w(iw) == 3)) proj_sign(iw) = -1.0_DP
+         END DO
+      END IF
       rotmat=0.0d0
       do iw=1,n_wannier
          call set_u_matrix (xaxis(:,iw),zaxis(:,iw),vaxis(:,:,iw))
@@ -3907,7 +3930,17 @@ SUBROUTINE compute_mmn_ibz
             end do
          end do
       end do
+      IF (atom_proj .AND. (.NOT. atom_proj_ext)) THEN
+         DO isym = 1, nsym2
+            DO iw = 1, n_wannier
+               DO jw = 1, n_wannier
+                  rotmat(iw,jw,isym) = proj_sign(iw) * rotmat(iw,jw,isym) * proj_sign(jw)
+               END DO
+            END DO
+         END DO
+      END IF
       deallocate(vaxis)
+      deallocate(proj_sign)
       deallocate(ips2p, lfound, iw2ip, ip2iw)
       allocate(check_mat(n_wannier, n_wannier), stat=ierr)
       IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating check_mat', 1)
@@ -3931,6 +3964,12 @@ SUBROUTINE compute_mmn_ibz
                   write(stdout,*) rotmat(:,:,isym)
                   write(stdout,*) "check_mat"
                   write(stdout,*) check_mat
+                  write(stdout,*) "n_wannier", n_wannier
+                  write(stdout,*) "center_w"
+                  write(stdout,*) center_w(1:3,1:n_wannier)
+                  write(stdout,*) "l_w, mr_w"
+                  write(stdout,*) l_w(1:n_wannier)
+                  write(stdout,*) mr_w(1:n_wannier)
                   call errore("compute_mmn_ibz", "Error: missing Wannier functions, see the output.", 1)
                end if
             end do
@@ -4105,6 +4144,10 @@ SUBROUTINE compute_mmn_ibz
       ! xkc(:,ik) + xbvec(:,ib) = s(:,:,isym) . xkc(:,ikp) + kdiff
       ! if with T
       ! xkc(:,ik) + xbvec(:,ib) = - s(:,:,isym) . xkc(:,ikp) + kdiff
+      !
+      ! NOTE: Loop order (isym outer, ikp inner) must match _kpoint_grid()
+      ! in symwannier/sym.py for consistent symmetry selection during
+      ! IBZ Mmn expansion.
       !
       USE kinds,           ONLY : DP
       USE klist,           ONLY : nkstot
@@ -6095,7 +6138,7 @@ SUBROUTINE compute_amn_with_atomproj
                           compute_zdistmat, compute_ddistmat, &
                           wf_times_overlap, wf_times_roverlap
    USE atproj, ONLY: atom_proj_dir, atom_proj_ext, atom_proj_ortho, &
-                     atom_proj_sym, natproj, nexatproj, nexatproj_max, &
+                     natproj, nexatproj, nexatproj_max, &
                      atproj_excl, atproj_typs, atom_proj_exclude, &
                      allocate_atproj_type, read_atomproj, init_tab_atproj, &
                      deallocate_atproj, atomproj_wfc
@@ -6149,8 +6192,6 @@ SUBROUTINE compute_amn_with_atomproj
                    'does not support magnetism with external projectors', 1)
       IF (noncolin) CALL errore('pw2wannier90', &
                    'does not support non-collinear magnetism with external projectors', 1)
-      IF (atom_proj_sym) CALL errore('pw2wannier90', &
-                   'does not support symmetrization with external projectors', 1)
    ENDIF
    !
    ALLOCATE(evc_k(npol*npwx, num_bands), stat=ierr)
@@ -6199,6 +6240,28 @@ SUBROUTINE compute_amn_with_atomproj
          WRITE (stdout, *) ''
          WRITE (stdout, '( 5x,"(read from pseudopotential files):"/)')
          CALL fill_nlmchi(natomwfc, lmax_wfc)
+         ! Reallocate guiding-function arrays for atomic projectors.
+         ! They were previously sized to n_wannier, but here we need natomwfc.
+         IF (ALLOCATED(center_w)) DEALLOCATE(center_w)
+         IF (ALLOCATED(l_w)) DEALLOCATE(l_w)
+         IF (ALLOCATED(mr_w)) DEALLOCATE(mr_w)
+         IF (ALLOCATED(zaxis)) DEALLOCATE(zaxis)
+         IF (ALLOCATED(xaxis)) DEALLOCATE(xaxis)
+         IF (ALLOCATED(alpha_w)) DEALLOCATE(alpha_w)
+         IF (ALLOCATED(r_w)) DEALLOCATE(r_w)
+         ALLOCATE(center_w(3,natomwfc), l_w(natomwfc), mr_w(natomwfc), &
+                  zaxis(3,natomwfc), xaxis(3,natomwfc), alpha_w(natomwfc), &
+                  r_w(natomwfc), stat=ierr)
+         IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating center_w/alpha_w/... for atom_proj', 1)
+         IF (noncolin) THEN
+            IF (ALLOCATED(spin_eig)) DEALLOCATE(spin_eig)
+            IF (ALLOCATED(spin_qaxis)) DEALLOCATE(spin_qaxis)
+            ALLOCATE(spin_eig(natomwfc), spin_qaxis(3,natomwfc), stat=ierr)
+            IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating spin_eig/spin_qaxis for atom_proj', 1)
+            spin_eig(:) = 1
+            spin_qaxis(:, :) = 0.0_DP
+            spin_qaxis(3, :) = 1.0_DP
+         ENDIF
          DO nwfc = 1, natomwfc
             WRITE (stdout, 1000, ADVANCE="no") &
                nwfc, nlmchi(nwfc)%na, atm(ityp(nlmchi(nwfc)%na)), &
@@ -6216,6 +6279,15 @@ SUBROUTINE compute_amn_with_atomproj
             center_w(1:3, nwfc) = tau(1:3, nlmchi(nwfc)%na)  ! Atom position in crystal coords
             l_w(nwfc) = nlmchi(nwfc)%l
             mr_w(nwfc) = nlmchi(nwfc)%m
+            IF (noncolin) THEN
+               ! Match the spin labeling used in the UPF projector ordering.
+               IF (0.5D0 - INT(nlmchi(nwfc)%ind/(2*nlmchi(nwfc)%l + 2)) > 0.0D0) THEN
+                  spin_eig(nwfc) = 1
+               ELSE
+                  spin_eig(nwfc) = -1
+               END IF
+               spin_qaxis(:, nwfc) = (/ 0.0_DP, 0.0_DP, 1.0_DP /)
+            END IF
             ! Set default axes and rotation angle
             zaxis(1:3, nwfc) = [0.0_DP, 0.0_DP, 1.0_DP]  ! z-axis
             xaxis(1:3, nwfc) = [1.0_DP, 0.0_DP, 0.0_DP]  ! x-axis
@@ -6270,6 +6342,27 @@ SUBROUTINE compute_amn_with_atomproj
          WRITE (stdout, *) ''
          n_proj = n_proj - nexatproj
       ENDIF
+      ! Compress projection-related arrays to remove excluded projectors.
+      ! This keeps the first n_proj entries consistent with exclusions.
+      IF (has_excl_proj) THEN
+         i = 1
+         DO j = 1, natproj
+            IF (atproj_excl(j)) CYCLE
+            center_w(:, i) = center_w(:, j)
+            l_w(i) = l_w(j)
+            mr_w(i) = mr_w(j)
+            zaxis(:, i) = zaxis(:, j)
+            xaxis(:, i) = xaxis(:, j)
+            alpha_w(i) = alpha_w(j)
+            r_w(i) = r_w(j)
+            IF (noncolin) THEN
+               spin_eig(i) = spin_eig(j)
+               spin_qaxis(:, i) = spin_qaxis(:, j)
+            END IF
+            i = i + 1
+         END DO
+      END IF
+      IF (.NOT. atom_proj_ext) natomwfc = natproj
       !
       IF (gamma_only) WRITE (stdout, '(5x,"gamma-point specific algorithms are used")')
       !
@@ -6307,6 +6400,13 @@ SUBROUTINE compute_amn_with_atomproj
       IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating atproj_excl', 1)
    ENDIF
    CALL mp_bcast(atproj_excl, ionode_id, world_comm)
+   CALL mp_bcast(center_w, ionode_id, world_comm)
+   CALL mp_bcast(l_w, ionode_id, world_comm)
+   CALL mp_bcast(mr_w, ionode_id, world_comm)
+   CALL mp_bcast(zaxis, ionode_id, world_comm)
+   CALL mp_bcast(xaxis, ionode_id, world_comm)
+   CALL mp_bcast(alpha_w, ionode_id, world_comm)
+   CALL mp_bcast(r_w, ionode_id, world_comm)
    !
    !   Initialize parallelism for linear algebra
    !
@@ -6361,7 +6461,7 @@ SUBROUTINE compute_amn_with_atomproj
          ALLOCATE (wfcatomall(npwx*npol, natproj), stat=ierr)
          IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating wfcatomall', 1)
       ELSE
-         ALLOCATE (wfcatomall(npwx*npol, natomwfc), stat=ierr)
+         ALLOCATE (wfcatomall(npwx*npol, natproj), stat=ierr)
          IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating wfcatomall', 1)
       ENDIF
    ENDIF
@@ -6434,7 +6534,7 @@ SUBROUTINE compute_amn_with_atomproj
             ENDIF
             ! exclude projectors
             i = 1 ! counter for wfcatom
-            DO j = 1, natomwfc ! counter for wfcatomall
+            DO j = 1, natproj ! counter for wfcatomall
                IF (atproj_excl(j)) CYCLE
                wfcatom(:, i) = wfcatomall(:, j)
                i = i + 1
@@ -6576,36 +6676,10 @@ SUBROUTINE compute_amn_with_atomproj
          ALLOCATE (rproj0(n_proj, num_bands), stat=ierr)
          IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating rproj0', 1)
          CALL calbec(npw_, wfcatom, evc_k, rproj0, nbnd=num_bands)
-         ! haven't tested symmetrization with external projectors, so
-         ! I disable these for now.
-         ! IF ((.NOT. atom_proj_ext) .AND. atom_proj_sym) THEN
-         !   IF (has_excl_proj) THEN
-         !     ALLOCATE (rproj0all(natomwfc, num_bands))
-         !     rproj0all = 0.0_DP
-         !     ! expand the size to natomwfc so I can call sym_proj_g
-         !     ! the excluded part is just 0.0
-         !     i = 1 ! counter for rproj0
-         !     DO j = 1, natomwfc ! counter for rproj0all
-         !       IF (atproj_excl(j)) CYCLE
-         !       rproj0all(j, :) = rproj0(i, :)
-         !       i = i + 1
-         !     END DO
-         !     !
-         !     CALL sym_proj_g(rproj0all)
-         !     !
-         !     ! exclude projectors
-         !     i = 1 ! counter for rproj0
-         !     DO j = 1, natomwfc ! counter for rproj0all
-         !       IF (atproj_excl(j)) CYCLE
-         !       rproj0(i, :) = rproj0all(j, :)
-         !       i = i + 1
-         !     END DO
-         !     !
-         !     DEALLOCATE (rproj0all)
-         !   ELSE
-         !     CALL sym_proj_g(rproj0)
-         !   END IF
-         ! END IF
+         ! NOTE:
+         ! sym_proj_* in projections_mod symmetrizes projectability (real),
+         ! not complex amn amplitudes. Complex iamn symmetrization for
+         ! atom_proj + irr_bz is handled in compute_mmn_ibz/save_sym_info.
          !
          ! Note the CONJG, I need <psi|g>, while rpoj0 = <g|psi>
          proj(:, :) = TRANSPOSE(rproj0(:, :))
@@ -6617,46 +6691,10 @@ SUBROUTINE compute_amn_with_atomproj
          IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating proj0', 1)
          CALL calbec(npw_, wfcatom, evc_k, proj0, nbnd=num_bands)
          !
-         ! IF ((.NOT. atom_proj_ext) .AND. atom_proj_sym) THEN
-         !   IF (has_excl_proj) THEN
-         !     ALLOCATE (proj0all(natomwfc, num_bands))
-         !     proj0all = (0.0_DP, 0.0_DP)
-         !     ! expand the size to natomwfc so I can call sym_proj_*
-         !     ! the exclude part is just 0.0
-         !     i = 1 ! counter for proj0
-         !     DO j = 1, natomwfc ! counter for proj0all
-         !       IF (atproj_excl(j)) CYCLE
-         !       proj0all(j, :) = proj0(i, :)
-         !       i = i + 1
-         !     END DO
-         !     !
-         !     IF (lspinorb) THEN
-         !       CALL sym_proj_so(domag, proj0all)
-         !     ELSE IF (noncolin) THEN
-         !       CALL sym_proj_nc(proj0all)
-         !     ELSE
-         !       CALL sym_proj_k(proj0all)
-         !     END IF
-         !     !
-         !     ! exclude projectors
-         !     i = 1 ! counter for proj0
-         !     DO j = 1, natomwfc ! counter for proj0all
-         !       IF (atproj_excl(j)) CYCLE
-         !       proj0(i, :) = proj0all(j, :)
-         !       i = i + 1
-         !     END DO
-         !     !
-         !     DEALLOCATE (proj0all)
-         !   ELSE
-         !     IF (lspinorb) THEN
-         !       CALL sym_proj_so(domag, proj0)
-         !     ELSE IF (noncolin) THEN
-         !       CALL sym_proj_nc(proj0)
-         !     ELSE
-         !       CALL sym_proj_k(proj0)
-         !     END IF
-         !   END IF
-         ! END IF
+         ! NOTE:
+         ! sym_proj_* in projections_mod symmetrizes projectability (real),
+         ! not complex amn amplitudes. Complex iamn symmetrization for
+         ! atom_proj + irr_bz is handled in compute_mmn_ibz/save_sym_info.
          !
          ! Note the CONJG, I need <psi|g>, while proj0 = <g|psi>
          proj(:, :) = TRANSPOSE(CONJG(proj0(:, :)))
@@ -6683,15 +6721,19 @@ SUBROUTINE compute_amn_with_atomproj
    ! If using pool parallelization, concatenate files written by other nodes
    ! to the main output.
    !
-   CALL utility_merge_files("amn", .TRUE.)
+   IF (irr_bz) THEN
+      CALL utility_merge_files("iamn", .TRUE.)
+   ELSE
+      CALL utility_merge_files("amn", .TRUE.)
+   ENDIF
    !
    CALL deallocate_atproj()
-   DEALLOCATE (e)
-   DEALLOCATE (wfcatom)
-   IF (freeswfcatom) DEALLOCATE (swfcatom)
-   IF (has_excl_proj) DEALLOCATE (wfcatomall)
-   DEALLOCATE (idesc_ip)
-   DEALLOCATE (rank_ip)
+   IF (ALLOCATED(e)) DEALLOCATE (e)
+   IF (ALLOCATED(wfcatom)) DEALLOCATE (wfcatom)
+   IF (freeswfcatom .and. ALLOCATED(swfcatom)) DEALLOCATE (swfcatom)
+   IF (has_excl_proj .and. ALLOCATED(wfcatomall)) DEALLOCATE (wfcatomall)
+   IF (ALLOCATED(idesc_ip)) DEALLOCATE (idesc_ip)
+   IF (ALLOCATED(rank_ip)) DEALLOCATE (rank_ip)
    !
    ! write to standard output and to file
    !

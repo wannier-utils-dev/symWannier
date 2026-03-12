@@ -56,7 +56,7 @@ def test_mmn_parsing_with_symmetry(test_data_dir):
     mmn_file = test_data_dir / "H.immn"
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
-    
+
     nnkp = Nnkp(str(nnkp_file))
     sym = Sym(file_sym=str(isym_file), nnkp=nnkp)
     mmn = Mmn(str(mmn_file), nnkp=nnkp, sym=sym)
@@ -79,7 +79,7 @@ def test_amn_parsing_with_symmetry(test_data_dir):
     amn_file = test_data_dir / "H.iamn"
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
-    
+
     nnkp = Nnkp(str(nnkp_file))
     sym = Sym(file_sym=str(isym_file), nnkp=nnkp)
     amn = Amn(str(amn_file), nnkp=nnkp, sym=sym)
@@ -89,7 +89,7 @@ def test_amn_parsing_with_symmetry(test_data_dir):
     assert amn.num_bands == 1
     assert amn.num_wann == 1
     assert amn.amn.shape == (64, 1, 1)
-    
+
     # Generate Umat and check unitarity
     umat = amn.Umat()
     assert umat.shape == (64, 1, 1)
@@ -113,7 +113,7 @@ def test_sym_parsing(test_data_dir):
     assert sym.nks == 10  # irreducible k-points
     assert sym.nkf == 64  # full k-points (4x4x4 grid)
     assert sym.nbnd == 1
-    
+
     # Check symmetry matrices
     assert sym.s.shape == (96, 3, 3)
 
@@ -125,10 +125,10 @@ def test_win_parsing(test_data_dir):
     """
     prefix = str(test_data_dir / "H")
     win = Win(prefix)
-    
+
     assert win.num_wann == 1
     assert win.num_iter == 20
-    assert hasattr(win, 'mp_grid')
+    assert hasattr(win, "mp_grid")
 
 
 def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
@@ -172,8 +172,8 @@ def test_wannierize_run_basic(run_wannier):
     assert (workdir / "H_py_tb.dat").exists()
 
     # Check spreads and centers were calculated
-    assert hasattr(wann, 'spreads')
-    assert hasattr(wann, 'r')
+    assert hasattr(wann, "spreads")
+    assert hasattr(wann, "r")
     assert wann.spreads.shape == (1,)
     assert wann.r.shape == (1, 3)
 
