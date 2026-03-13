@@ -134,18 +134,18 @@ def test_win_parsing(test_data_dir):
     assert hasattr(win, "mp_grid")
 
 
-def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
+def test_wannierize_initialization_with_symmetry(copy_inputs, work_dir):
     """Check the internal state after initializing `Wannierize` with symmetry.
 
     The test copies the input files into a temporary directory, initializes the
     solver, and verifies grid sizes, neighbor count, symmetry flags, and key
     internal array shapes.
     """
-    copy_inputs("H", tmp_path)
+    copy_inputs("H", work_dir)
 
     cwd = __import__("os").getcwd()
     try:
-        __import__("os").chdir(tmp_path)
+        __import__("os").chdir(work_dir)
         wann = Wannierize(prefix="H", lsym=True, lsite_sym=False)
 
         # Check initialization

@@ -1,6 +1,6 @@
 """Regression tests for the Fe SW+PD case.
 
-This file exercises the Fe `SW+PD` case imported from `symwan_proj`:
+This file exercises the Fe `SW+PD` workflow:
 `irr_bz + atom_proj + projectability disentanglement`.
 
 The main checks are:
@@ -31,7 +31,7 @@ from symwannier.nnkp import Nnkp
 from symwannier.sym import Sym
 
 
-def _prefix(test_data_dir: Path) -> Path:
+def _case_prefix(test_data_dir: Path) -> Path:
     """Return the shared prefix for the Fe SW+PD input set."""
     return test_data_dir / "fe_sw_pd"
 
@@ -117,14 +117,14 @@ def _little_group_covariance_stats(prefix: Path) -> tuple[float, float, float]:
     )
 
 
-def test_fe_sw_pd_static_inputs(test_data_dir):
+def test_fe_sw_pd_input_metadata(test_data_dir):
     """Lock down the basic metadata of the static Fe SW+PD inputs.
 
     This test focuses on array sizes and header values rather than physical
     observables. If `nk`, `nks`, `nsym`, `num_bands`, or `num_wann` drift, later
     symmetry and disentanglement failures become much harder to diagnose.
     """
-    prefix = _prefix(test_data_dir)
+    prefix = _case_prefix(test_data_dir)
     nnkp = Nnkp(str(prefix) + ".nnkp")
     sym = Sym(str(prefix) + ".isym", nnkp=nnkp)
     amn = Amn(str(prefix) + ".iamn", nnkp=nnkp, sym=sym)
@@ -144,7 +144,7 @@ def test_fe_sw_pd_static_inputs(test_data_dir):
     assert _iamn_header(prefix.with_suffix(".iamn")) == (50, 59, 18)
 
 
-def test_fe_sw_pd_projectability_windows(copy_inputs, tmp_path):
+def test_fe_sw_pd_projectability_windows(copy_inputs, work_dir):
     """Lock down the automatically chosen projectability-based windows.
 
     The main Python-side change imported for this case sits in
@@ -157,8 +157,8 @@ def test_fe_sw_pd_projectability_windows(copy_inputs, tmp_path):
     """
     from symwannier.wannierize import Wannierize
 
-    copy_inputs("fe_sw_pd", tmp_path)
-    prefix = tmp_path / "fe_sw_pd"
+    copy_inputs("fe_sw_pd", work_dir)
+    prefix = work_dir / "fe_sw_pd"
     wann = Wannierize(
         prefix=str(prefix),
         lsym=True,
@@ -186,7 +186,7 @@ def test_fe_sw_pd_iamn_little_group_covariance(test_data_dir):
     the mean, p95, and max residuals very small confirms that the
     `atom_proj + irr_bz` inputs are read consistently on the Python side.
     """
-    mean_r, p95_r, max_r = _little_group_covariance_stats(_prefix(test_data_dir))
+    mean_r, p95_r, max_r = _little_group_covariance_stats(_case_prefix(test_data_dir))
     assert mean_r < 1e-6
     assert p95_r < 1e-6
     assert max_r < 1e-6
@@ -205,7 +205,7 @@ def test_fe_sw_pd_symmetrized_umat_is_unitary(test_data_dir):
     Keeping these stages separate makes it easier to pinpoint where a future
     regression first breaks unitarity.
     """
-    prefix = _prefix(test_data_dir)
+    prefix = _case_prefix(test_data_dir)
     nnkp = Nnkp(str(prefix) + ".nnkp")
     sym = Sym(str(prefix) + ".isym", nnkp=nnkp)
     amn = Amn(str(prefix) + ".iamn", nnkp=nnkp, sym=sym)

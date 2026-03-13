@@ -34,6 +34,7 @@ include = ["symwannier"]
 
 [tool.pytest.ini_options]
 markers = [
+	"fast: default regression tests excluding long-running workflow cases",
 	"slow: long-running regression tests for large workflow cases",
 ]
 

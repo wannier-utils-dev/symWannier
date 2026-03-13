@@ -9,7 +9,7 @@ This repository uses a `src/` layout. Running `python3 -m pytest` directly may f
 From the repository root:
 
 ```bash
-PYTHONPATH=src python3 -m pytest -q -m "not slow"
+PYTHONPATH=src python3 -m pytest -q -m fast
 ```
 
 This is the simplest way to run the default regression suite without creating a virtual
@@ -35,7 +35,7 @@ If you want to run the tests in an isolated environment:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest -q -m "not slow"
+.venv/bin/python -m pytest -q -m fast
 ```
 
 ## Run a single test file
