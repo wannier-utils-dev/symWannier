@@ -107,7 +107,22 @@ class Wannierize:
         self.eig = Eig(prefix+"." + ext + "eig", sym=self.sym, log=self.log)
         self.log.debug(f"Loaded Amn: shape={self.amn.amn.shape}, Eig: shape={self.eig.eig.shape}")
         # Projectability p_mk = sum_n |<psi_mk|g_n>|^2 for optional disentanglement mode
-        self.projectability = np.einsum("knm,knm->kn", self.amn.amn, np.conj(self.amn.amn), optimize=True).real
+        self.projectability = np.einsum(
+            "knm,knm->kn", self.amn.amn, np.conj(self.amn.amn), optimize=True
+        ).real
+        is_finite = np.isfinite(self.projectability)
+        num_nan = np.isnan(self.projectability).sum()
+        num_inf = np.isinf(self.projectability).sum()
+        num_neg = (self.projectability < 0).sum()
+        self.log.info(
+            "projectability stats: "
+            f"min={np.min(self.projectability):.6e}, max={np.max(self.projectability):.6e}, "
+            f"nan={num_nan}, inf={num_inf}, neg={num_neg}"
+        )
+        if not is_finite.all():
+            raise ValueError("projectability contains NaN or inf")
+        if num_neg != 0:
+            raise ValueError("projectability contains negative values")
         self._validate_inputs()
         self.Umat_opt = None
 
