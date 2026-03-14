@@ -1,3 +1,10 @@
+"""Integration tests for parsing and wannierizing the hydrogen inputs.
+
+These checks cover the individual file parsers, symmetry-based expansion to the
+full Brillouin zone, and the initialization and execution paths of
+`Wannierize`.
+"""
+
 import numpy as np
 import pytest
 
@@ -11,7 +18,11 @@ from symwannier.wannierize import Wannierize
 
 
 def test_nnkp_parsing(test_data_dir):
-    """Test parsing of H.nnkp file."""
+    """Check that the basic metadata in `H.nnkp` is parsed correctly.
+
+    The test verifies the number of k-points, neighbor vectors, Wannier
+    functions, array shapes, and that the first k-point is Gamma.
+    """
     nnkp_file = test_data_dir / "H.nnkp"
     nnkp = Nnkp(str(nnkp_file))
 
@@ -25,7 +36,11 @@ def test_nnkp_parsing(test_data_dir):
 
 
 def test_eig_parsing(test_data_dir):
-    """Test parsing of H.ieig file."""
+    """Check that the eigenvalue data in `H.ieig` is read as expected.
+
+    This verifies the number of irreducible-zone k-points, the band count, and
+    the shape of the eigenvalue array.
+    """
     eig_file = test_data_dir / "H.ieig"
     eig = Eig(str(eig_file))
 
@@ -35,11 +50,15 @@ def test_eig_parsing(test_data_dir):
 
 
 def test_mmn_parsing_with_symmetry(test_data_dir):
-    """Test parsing of H.immn file (IBZ Mmn)."""
+    """Check that `H.immn` expands to the full BZ using symmetry operations.
+
+    The test builds `Mmn` with `H.isym` and `H.nnkp`, then verifies the expanded
+    k-point count, neighbor count, matrix shape, and `kb2k` mapping shape.
+    """
     mmn_file = test_data_dir / "H.immn"
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
-    
+
     nnkp = Nnkp(str(nnkp_file))
     sym = Sym(file_sym=str(isym_file), nnkp=nnkp)
     mmn = Mmn(str(mmn_file), nnkp=nnkp, sym=sym)
@@ -54,11 +73,15 @@ def test_mmn_parsing_with_symmetry(test_data_dir):
 
 
 def test_amn_parsing_with_symmetry(test_data_dir):
-    """Test parsing of H.iamn file and Umat generation."""
+    """Check full-BZ expansion of `H.iamn` and the properties of `Umat()`.
+
+    This verifies the shape of the symmetry-expanded AMN array and confirms
+    that the generated `Umat` is unitary at every k-point.
+    """
     amn_file = test_data_dir / "H.iamn"
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
-    
+
     nnkp = Nnkp(str(nnkp_file))
     sym = Sym(file_sym=str(isym_file), nnkp=nnkp)
     amn = Amn(str(amn_file), nnkp=nnkp, sym=sym)
@@ -68,7 +91,7 @@ def test_amn_parsing_with_symmetry(test_data_dir):
     assert amn.num_bands == 1
     assert amn.num_wann == 1
     assert amn.amn.shape == (64, 1, 1)
-    
+
     # Generate Umat and check unitarity
     umat = amn.Umat()
     assert umat.shape == (64, 1, 1)
@@ -77,7 +100,11 @@ def test_amn_parsing_with_symmetry(test_data_dir):
 
 
 def test_sym_parsing(test_data_dir):
-    """Test parsing of H.isym symmetry file."""
+    """Check the symmetry information loaded from `H.isym`.
+
+    The test verifies the number of symmetry operations, irreducible and full
+    k-points, band count, and the shape of the symmetry-matrix array.
+    """
     isym_file = test_data_dir / "H.isym"
     nnkp_file = test_data_dir / "H.nnkp"
     nnkp = Nnkp(str(nnkp_file))
@@ -88,28 +115,37 @@ def test_sym_parsing(test_data_dir):
     assert sym.nks == 10  # irreducible k-points
     assert sym.nkf == 64  # full k-points (4x4x4 grid)
     assert sym.nbnd == 1
-    
+
     # Check symmetry matrices
     assert sym.s.shape == (96, 3, 3)
 
 
 def test_win_parsing(test_data_dir):
-    """Test parsing of H.win file."""
+    """Check that the main settings in `H.win` are parsed correctly.
+
+    This covers the number of Wannier functions, the iteration count, and the
+    presence of the `mp_grid` attribute.
+    """
     prefix = str(test_data_dir / "H")
     win = Win(prefix)
-    
+
     assert win.num_wann == 1
     assert win.num_iter == 20
-    assert hasattr(win, 'mp_grid')
+    assert hasattr(win, "mp_grid")
 
 
-def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
-    """Test Wannierize class initialization with symmetry."""
-    copy_inputs("H", tmp_path)
+def test_wannierize_initialization_with_symmetry(copy_inputs, work_dir):
+    """Check the internal state after initializing `Wannierize` with symmetry.
+
+    The test copies the input files into a temporary directory, initializes the
+    solver, and verifies grid sizes, neighbor count, symmetry flags, and key
+    internal array shapes.
+    """
+    copy_inputs("H", work_dir)
 
     cwd = __import__("os").getcwd()
     try:
-        __import__("os").chdir(tmp_path)
+        __import__("os").chdir(work_dir)
         wann = Wannierize(prefix="H", lsym=True, lsite_sym=False)
 
         # Check initialization
@@ -128,7 +164,11 @@ def test_wannierize_initialization_with_symmetry(copy_inputs, tmp_path):
 
 
 def test_wannierize_run_basic(run_wannier):
-    """Test basic Wannierize.run() execution for H inputs."""
+    """Check the result of running `Wannierize.run()` for the H input.
+
+    This verifies output file creation, the spread and center arrays, and the
+    expected total spread and center position for the single Wannier function.
+    """
     wann, workdir = run_wannier("H", lsym=True, num_iter=2)
 
     # Check output files were created
@@ -136,8 +176,8 @@ def test_wannierize_run_basic(run_wannier):
     assert (workdir / "H_py_tb.dat").exists()
 
     # Check spreads and centers were calculated
-    assert hasattr(wann, 'spreads')
-    assert hasattr(wann, 'r')
+    assert hasattr(wann, "spreads")
+    assert hasattr(wann, "r")
     assert wann.spreads.shape == (1,)
     assert wann.r.shape == (1, 3)
 

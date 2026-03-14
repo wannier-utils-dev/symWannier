@@ -1,9 +1,19 @@
+"""Regression test for wannierization on the Sn input.
+
+The test checks output file creation together with the reference spreads,
+centers, and total spread for the Wannier functions.
+"""
+
 import numpy as np
 import pytest
 
 
 def test_wannierize_sn(run_wannier):
-    """Run Wannierize on Sn inputs and validate against reference output."""
+    """Check that wannierization of the Sn input matches the reference data.
+
+    This verifies creation of `Sn_py_hr.dat` and `Sn_py_tb.dat`, then checks
+    the spreads, centers, and total spread for the eight Wannier functions.
+    """
     wann, workdir = run_wannier("Sn", lsym=True)
 
     # Output files
@@ -11,26 +21,30 @@ def test_wannierize_sn(run_wannier):
     assert (workdir / "Sn_py_tb.dat").exists()
 
     # Expected reference values
-    expected_spreads = np.array([
-        1.68328577,
-        1.68328577,
-        2.44395825,
-        2.44395825,
-        2.44402472,
-        2.44402472,
-        2.44402472,
-        2.44402472,
-    ])
-    expected_centers = np.array([
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-    ])
+    expected_spreads = np.array(
+        [
+            1.68328577,
+            1.68328577,
+            2.44395825,
+            2.44395825,
+            2.44402472,
+            2.44402472,
+            2.44402472,
+            2.44402472,
+        ]
+    )
+    expected_centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+        ]
+    )
 
     assert wann.spreads.shape == (8,)
     assert wann.r.shape == (8, 3)
