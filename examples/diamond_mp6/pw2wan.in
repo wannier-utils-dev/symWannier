@@ -1,0 +1,3 @@
+&inputpp
+  outdir='./work', prefix='diamond_mp6', seedname='diamond_mp6', irr_bz=.true.
+/
