@@ -18,39 +18,52 @@ python verify.py
 Expected output:
 
 ```
-Fourier round-trip error  max| H(R)->H(k) - H(k) |  at the mesh points:
-  --snap-kp false  (finite-digit .nnkp k) : ~2e-06
-  --snap-kp true   (exact i/mp_grid k)    : ~5e-14
+System: 6x6x6 mesh = 216 k-points, 4 bands -> 4 Wannier functions (no disentanglement)
 
-(1) deliverable H(R) coefficients (written to hr.dat/tb.dat), no interpolation:
-      max| H(R)_false - H(R)_true | = ~2e-07
+(A) DFT bands vs Wannier bands   max | eps_Wannier(k) - eps_DFT(k) |
+    reference: QE eigenvalues from .ieig (external)
+    max over 216 mesh k-points and 4 bands, in eV:
+      --snap-kp false  (H(R) from 8-digit .nnkp k) : 2.34e-06 eV
+      --snap-kp true   (H(R) from exact i/mp_grid) : 1.98e-10 eV
+    floor of this metric, with NO Fourier transform at all:
+      max| eig H(k) - eps_DFT | = 1.98e-10 eV   (MLWF gauge U, ||U^dag U - 1|| = 6.9e-12)
 
-(2) interpolate H(R) back at the EXACT double-precision mesh k, vs true H(k):
-      --snap-kp false  (H(R) from 8-digit .nnkp k) : ~2e-06
-      --snap-kp true   (H(R) from exact i/mp_grid ) : ~4e-14
+(B) Fourier self-consistency   max | H(R)->H(k) - H(k) |
+    reference: symWannier's own H(k) (internal; the gauge floor cancels)
+    max over 216 mesh k-points and 4x4 matrix elements, in eV:
+      --snap-kp false  (H(R) from 8-digit .nnkp k) : 1.76e-06 eV
+      --snap-kp true   (H(R) from exact i/mp_grid) : 3.74e-14 eV
+
+Underlying cause: the written H(R) coefficients themselves differ by
+  max| H(R)_false - H(R)_true | = 2.07e-07 eV
 ```
 
-(the last digits vary a little with the BLAS/platform; the point is ~1e-6 vs
-machine precision)
+(the last digits vary a little with the BLAS/platform; the point is ~1e-6
+before the fix versus the respective floors after it)
 
-**Why this is the right test.** A Wannier tight-binding model reproduces the
-ab-initio `H(k)` exactly at the k-points of the Wannierization mesh. So
-transforming the model's `H(k)` to `H(R)` and back must recover `H(k)` at those
-points to machine precision. With the finite-digit `.nnkp` k-points (`1/6`
-stored as `0.16666667`, ~3e-9 low) the phases `2π·k·R` summed over the cell
-amplify the error to ~1e-6; snapping k to the exact rational `i/6` (default)
-restores machine precision (~1e-13).
+**What the two numbers mean.** They use different references and answer
+different questions:
 
-**A note on what this measures (lines (1)/(2)).** The round-trip above uses the
-*same* k for `H(k)→H(R)` and `H(R)→H(k)`, which slightly overstates the role of
-the backward transform. The error actually lives entirely in the forward build
-of `H(R)`: the coefficients written to `hr.dat`/`tb.dat` are themselves wrong by
-~2e-7 (line (1)), independent of any interpolation. Wannier band interpolation
-(`H(R)→H(k)`) always evaluates at double-precision k and never re-reads the
-`.nnkp`, so it does not depend on `.nnkp` precision — yet interpolating the
-corrupted `H(R)` even at the *exact* mesh k still misses the true `H(k)` by ~1e-6
-(line (2), `--snap-kp false`). Snapping fixes the `H(R)` construction, so both
-metrics reach machine precision.
+- **(A) is the error a user of the model sees**: the interpolated Wannier bands
+  against the DFT eigenvalues from QE (an *external* reference). Its floor is
+  set not by the Fourier transform but by the unitarity of the MLWF gauge
+  matrix `U` — `H(k)` is built as `U†·diag(ε_DFT)·U`, so a `U` that is unitary
+  only to ~7e-12 already shifts the eigenvalues by ~2e-10 eV before any
+  transform. The snapped value lands exactly on that pre-existing floor, so
+  nothing of the truncation is left.
+- **(B) isolates the bug**: comparing against symWannier's own `H(k)` (an
+  *internal* reference) puts the same `H` on both sides, so the gauge floor
+  cancels and only the Fourier-transform error remains. This is a
+  self-consistency check, *not* a comparison against DFT.
+
+**Where the error comes from.** symWannier builds `H(R)` (written to
+`hr.dat`/`tb.dat`) as `H(R) = (1/Nk) Σ_k exp(-2πi k·R) H(k)`. Without
+`--snap-kp` those phases use the 8-digit `.nnkp` k (`1/6` stored as
+`0.16666667`, ~3e-9 low), which corrupts the `H(R)` coefficients by ~2e-7.
+The *backward* transform (band interpolation `H(R)→H(k)`) always evaluates at
+double-precision k and never re-reads the `.nnkp`, so it is not where precision
+is lost — the verification above therefore builds `H(R)` both ways but always
+evaluates back at the exact mesh k.
 
 Equivalently, run the Wannierization both ways and compare the Hamiltonian:
 

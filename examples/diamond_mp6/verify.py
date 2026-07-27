@@ -5,25 +5,37 @@ Verify the k-point snapping fix on the diamond (6x6x6) example.
 This uses only the committed IBZ inputs (diamond_mp6.i*), so it needs symWannier
 (Python) only -- no QE / wannier90 / pw2wannier90.
 
-A Wannier tight-binding model must reproduce the ab-initio Hamiltonian H(k)
-exactly at the k-points of the Wannierization mesh. We therefore Fourier
-transform the model's H(k) to real space H(R) and back, and measure how well
-H(k) is recovered at the mesh points.
+WHAT GOES WRONG.  symWannier writes the tight-binding Hamiltonian H(R)
+(hr.dat / tb.dat) by Fourier transforming the ab-initio H(k),
 
-The 6x6x6 grid has k = i/6; 1/6 = 0.16666... is not representable in the 8
-decimals that wannier90 writes into the .nnkp, so the stored value is ~3e-9
-below the exact double. Summed over the real-space cell in the Fourier phases
-2*pi*k*R this grows to ~1e-6. Snapping k back to the exact rational i/6
-(the default, --snap-kp true) restores machine precision.
+        H(R) = (1/Nk) sum_k  exp(-2*pi*i k.R) H(k)
 
-Addendum -- what the numbers really mean.  The round-trip above uses the SAME k
-for H(k)->H(R) and H(R)->H(k), which slightly overstates the role of the
-backward transform.  Wannier interpolation (H(R)->H(k) along a band path)
-always evaluates at whatever double-precision k you ask for and never re-reads
-the .nnkp, so it does NOT depend on .nnkp precision.  The error lives entirely
-in the forward build of H(R): the coefficients written to hr.dat/tb.dat are
-themselves wrong by ~2e-7, and interpolating that H(R) even at the EXACT mesh k
-still misses the true H(k) by ~1e-6.  Lines (1)/(2) below show this directly.
+Without --snap-kp the k used here are the .nnkp values, which wannier90 stores
+to only 8 decimals.  On a 6x6x6 mesh 1/6 = 0.16666667 is ~3e-9 too small; that
+error enters the phases 2*pi*k.R and corrupts the H(R) coefficients.
+
+Note the asymmetry: the BACKWARD transform (Wannier interpolation H(R) -> H(k)
+along a band path) evaluates at whatever double-precision k you ask for and
+never re-reads the .nnkp, so it does NOT depend on .nnkp precision.  Only the
+forward build of H(R) does.  Below, H(R) is built both ways and in BOTH cases
+evaluated back at the exact double-precision mesh k, so the only difference is
+how H(R) was built.
+
+TWO DIFFERENT ERRORS ARE REPORTED -- they answer different questions:
+
+(A) DFT bands vs Wannier bands.  Reference = the QE eigenvalues eps_DFT read
+    from the .ieig file, i.e. an EXTERNAL reference.  This is the error a user
+    of the model actually sees.  Its floor is NOT set by the Fourier transform
+    but by the unitarity of the MLWF gauge matrix U (~1e-11 here): H(k) is
+    built as U^dag diag(eps_DFT) U, so if U is not exactly unitary the
+    eigenvalues of H(k) already differ from eps_DFT before any transform.  That
+    floor is printed too, so the snapped number can be recognised as sitting on
+    it rather than being a leftover of the truncation.
+
+(B) Fourier self-consistency.  Reference = symWannier's own H(k), i.e. an
+    INTERNAL reference.  Because the same H(k) appears on both sides, the U
+    floor cancels and this isolates the Fourier-transform error alone -- the
+    quantity the snap actually fixes.  This is NOT a comparison against DFT.
 """
 import os
 import sys
@@ -33,37 +45,23 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 from symwannier.wannierize import Wannierize
 
-# Build the symmetry-adapted Wannier model on the 6x6x6 mesh.
-w = Wannierize(prefix="diamond_mp6", lsym=True, lsite_sym=True, snap_kp=True)
+# Build the symmetry-adapted Wannier model.  snap_kp only affects the Fourier
+# phases below (U and the DFT eigenvalues come from DFT), so we read the raw
+# .nnkp k here and form the exact rationals ourselves.
+w = Wannierize(prefix="diamond_mp6", lsym=True, lsite_sym=True, snap_kp=False)
 w.run()
 
-# H(k) = U(k)^dagger diag(eps(k)) U(k) -- what symWannier computes and writes as H(R).
+eps_dft = np.sort(w.eig.eig, axis=1)     # DFT band energies from QE (.ieig), in eV
+nk, nbnd = eps_dft.shape
+nw = w.Umat.shape[2]
+
+# H(k) in the Wannier gauge: H(k) = U(k)^dagger diag(eps_DFT(k)) U(k).
 H = np.einsum("kni,kn,knj->kij", np.conj(w.Umat), w.eig.eig, w.Umat)
-k_snap = w.kpts                    # exact i/mp_grid (bit-identical to QE internal k)
-k_trunc = np.round(k_snap, 8)      # the finite-digit values as stored in .nnkp
 
-N = int(w.win.mp_grid[0])
-nk = len(H)
-R = np.array(list(itertools.product(range(-(N // 2), N - N // 2), repeat=3)))
-
-
-def roundtrip_err(k):
-    kr = np.einsum("ka,ra->kr", k, R)
-    ham_r = np.einsum("kmn,kr->rmn", H, np.exp(-2j * np.pi * kr)) / nk   # H(k) -> H(R)
-    ham_k = np.einsum("rmn,kr->kmn", ham_r, np.exp(2j * np.pi * kr))     # H(R) -> H(k)
-    return np.max(np.abs(ham_k - H))
-
-
-print()
-print("Fourier round-trip error  max| H(R)->H(k) - H(k) |  at the mesh points:")
-print("  --snap-kp false  (finite-digit .nnkp k) : {:.2e}".format(roundtrip_err(k_trunc)))
-print("  --snap-kp true   (exact i/mp_grid k)    : {:.2e}".format(roundtrip_err(k_snap)))
-print()
-print("max |k_snap - k_trunc| = {:.2e}".format(np.max(np.abs(k_snap - k_trunc))))
-
-# --- Addendum: the error is in H(R) itself; the backward transform is double
-# --- precision and does not depend on the .nnkp.  Build H(R) with the two
-# --- forward k, and in BOTH cases interpolate back at the EXACT mesh k.
+k_nnkp = w.kpts                                  # raw .nnkp, 8 decimals (0.16666667 for 1/6)
+mp = np.asarray(w.win.mp_grid, dtype=int)        # per-direction mesh, e.g. [6 6 6]
+k_exact = np.round(k_nnkp * 2 * mp) / (2 * mp)   # snapped: exact i/mp_grid rational
+R = np.array(list(itertools.product(*[range(-(n // 2), n - n // 2) for n in mp])))
 
 
 def build_HR(k_build):
@@ -73,20 +71,54 @@ def build_HR(k_build):
 
 
 def interp_at_exact(ham_r):
-    """Backward transform H(R) -> H(k) at the EXACT (double-precision) mesh k."""
-    kr = np.einsum("ka,ra->kr", k_snap, R)
+    """Backward transform H(R) -> H(k) at the EXACT double-precision mesh k."""
+    kr = np.einsum("ka,ra->kr", k_exact, R)
     return np.einsum("rmn,kr->kmn", ham_r, np.exp(2j * np.pi * kr))
 
 
-HR_trunc = build_HR(k_trunc)   # --snap-kp false: H(R) built from 8-digit .nnkp k (the bug)
-HR_snap = build_HR(k_snap)     # --snap-kp true : H(R) built from exact i/mp_grid k
+HR_nnkp = build_HR(k_nnkp)     # --snap-kp false: H(R) built from 8-digit .nnkp k (the bug)
+HR_exact = build_HR(k_exact)   # --snap-kp true : H(R) built from exact i/mp_grid k
+Hk_nnkp = interp_at_exact(HR_nnkp)
+Hk_exact = interp_at_exact(HR_exact)
+
+# Gauge floor of metric (A): how far eig H(k) already is from eps_DFT with no
+# Fourier transform at all.  Meaningful as a band comparison only without
+# disentanglement (num_wann == num_bands).
+gauge_floor = np.max(np.abs(np.linalg.eigvalsh(H) - eps_dft)) if nw == nbnd else None
+unitarity = np.max(np.abs(np.einsum("kni,knj->kij", np.conj(w.Umat), w.Umat) - np.eye(nw)))
 
 print()
-print("(1) deliverable H(R) coefficients (written to hr.dat/tb.dat), no interpolation:")
-print("      max| H(R)_false - H(R)_true | = {:.2e}".format(np.max(np.abs(HR_trunc - HR_snap))))
+print("System: {} mesh = {} k-points, {} bands -> {} Wannier functions{}".format(
+    "x".join(str(n) for n in mp), nk, nbnd, nw,
+    " (no disentanglement)" if nw == nbnd else ""))
 print()
-print("(2) interpolate H(R) back at the EXACT double-precision mesh k, vs true H(k):")
-print("      --snap-kp false  (H(R) from 8-digit .nnkp k) : {:.2e}".format(
-    np.max(np.abs(interp_at_exact(HR_trunc) - H))))
-print("      --snap-kp true   (H(R) from exact i/mp_grid ) : {:.2e}".format(
-    np.max(np.abs(interp_at_exact(HR_snap) - H))))
+
+if gauge_floor is not None:
+    print("(A) DFT bands vs Wannier bands   max | eps_Wannier(k) - eps_DFT(k) |")
+    print("    reference: QE eigenvalues from .ieig (external)")
+    print("    max over {} mesh k-points and {} bands, in eV:".format(nk, nbnd))
+    print("      --snap-kp false  (H(R) from 8-digit .nnkp k) : {:.2e} eV".format(
+        np.max(np.abs(np.linalg.eigvalsh(Hk_nnkp) - eps_dft))))
+    print("      --snap-kp true   (H(R) from exact i/mp_grid) : {:.2e} eV".format(
+        np.max(np.abs(np.linalg.eigvalsh(Hk_exact) - eps_dft))))
+    print("    floor of this metric, with NO Fourier transform at all:")
+    print("      max| eig H(k) - eps_DFT | = {:.2e} eV   (MLWF gauge U, ||U^dag U - 1|| = {:.1e})"
+          .format(gauge_floor, unitarity))
+    print("    -> the snapped value sits on this pre-existing gauge floor, not on")
+    print("       a leftover of the k-point truncation.")
+    print()
+
+print("(B) Fourier self-consistency   max | H(R)->H(k) - H(k) |")
+print("    reference: symWannier's own H(k) (internal; the gauge floor cancels,")
+print("    so this isolates the Fourier-transform error the snap fixes)")
+print("    max over {} mesh k-points and {}x{} matrix elements, in eV:".format(nk, nw, nw))
+print("      --snap-kp false  (H(R) from 8-digit .nnkp k) : {:.2e} eV".format(
+    np.max(np.abs(Hk_nnkp - H))))
+print("      --snap-kp true   (H(R) from exact i/mp_grid) : {:.2e} eV".format(
+    np.max(np.abs(Hk_exact - H))))
+print()
+print("Underlying cause: the written H(R) coefficients themselves differ by")
+print("  max| H(R)_false - H(R)_true | = {:.2e} eV  (over {} R-vectors, {}x{} elements)"
+      .format(np.max(np.abs(HR_nnkp - HR_exact)), len(R), nw, nw))
+print("and the k-points differ by  max| k_exact - k_nnkp | = {:.2e}"
+      .format(np.max(np.abs(k_exact - k_nnkp))))
