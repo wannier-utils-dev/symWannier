@@ -3754,6 +3754,7 @@ SUBROUTINE compute_mmn_ibz
       USE constants,       ONLY : tpi
       USE wannier,         ONLY : n_wannier, l_w, mr_w, xaxis, zaxis, center_w, &
                                   spin_eig, spin_qaxis
+      USE atproj,          ONLY : atom_proj, atom_proj_ext
       USE symm_base,       ONLY : d1, d2, d3, nsym
       !
       COMPLEX(DP), INTENT(OUT) :: rotmat(n_wannier, n_wannier, nsym2)
@@ -3799,7 +3800,7 @@ SUBROUTINE compute_mmn_ibz
       REAL(DP)              :: dvec(3,32), dvec_in(3,32), dwgt(32), dylm1(32), dylm2(32)
       COMPLEX(DP)           :: spin1(2), spin2(2), u_spin(2,2)
       INTEGER, ALLOCATABLE  :: ip2iw(:), iw2ip(:), ips2p(:,:)
-      REAL(DP), ALLOCATABLE :: vaxis(:,:,:)
+      REAL(DP), ALLOCATABLE :: vaxis(:,:,:), proj_sign(:)
       logical, ALLOCATABLE  :: lfound(:)
       COMPLEX(DP), ALLOCATABLE :: check_mat(:,:)
       INTEGER               :: l, m1, m2
@@ -3871,6 +3872,17 @@ SUBROUTINE compute_mmn_ibz
       !
       allocate( vaxis(3,3,n_wannier), stat=ierr)
       IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating vaxis', 1)
+      allocate( proj_sign(n_wannier), stat=ierr)
+      IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating proj_sign', 1)
+      proj_sign = 1.0_DP
+      IF (atom_proj .AND. (.NOT. atom_proj_ext)) THEN
+         DO iw = 1, n_wannier
+            ! Keep ordinary atom_proj AMN unchanged and absorb the
+            ! phase-convention mismatch only in symmetry rotmat.
+            IF (l_w(iw) == 1 .AND. mr_w(iw) == 1) proj_sign(iw) = -1.0_DP
+            IF (l_w(iw) == 2 .AND. (mr_w(iw) == 2 .OR. mr_w(iw) == 3)) proj_sign(iw) = -1.0_DP
+         END DO
+      END IF
       rotmat=0.0d0
       do iw=1,n_wannier
          call set_u_matrix (xaxis(:,iw),zaxis(:,iw),vaxis(:,:,iw))
@@ -3907,7 +3919,17 @@ SUBROUTINE compute_mmn_ibz
             end do
          end do
       end do
+      IF (atom_proj .AND. (.NOT. atom_proj_ext)) THEN
+         DO isym = 1, nsym2
+            DO iw = 1, n_wannier
+               DO jw = 1, n_wannier
+                  rotmat(iw,jw,isym) = proj_sign(iw) * rotmat(iw,jw,isym) * proj_sign(jw)
+               END DO
+            END DO
+         END DO
+      END IF
       deallocate(vaxis)
+      deallocate(proj_sign)
       deallocate(ips2p, lfound, iw2ip, ip2iw)
       allocate(check_mat(n_wannier, n_wannier), stat=ierr)
       IF (ierr /= 0) CALL errore('pw2wannier90', 'Error allocating check_mat', 1)
