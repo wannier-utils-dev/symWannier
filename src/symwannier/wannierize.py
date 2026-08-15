@@ -48,7 +48,7 @@ class Wannierize:
         Logger to use; if not provided a module logger is created.
     """
 
-    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, log_level=None, log=None):
+    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, log_level=None, log=None, snap_kp=True):
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
             # Determine log level
@@ -63,7 +63,7 @@ class Wannierize:
         self.prefix = prefix
         self.time = TimeData(log=self.log)
         self.win = Win(prefix, log=self.log)
-        self.nnkp = Nnkp(prefix + ".nnkp", log=self.log)
+        self.nnkp = Nnkp(prefix + ".nnkp", log=self.log, snap_kp=snap_kp)
         self.log.debug(f"Loaded nnkp: nk={self.nnkp.nk}, nb={self.nnkp.nb}, num_wann={self.nnkp.num_wann}")
         self.lsym = lsym
         self.lsite_sym = lsite_sym
@@ -693,6 +693,17 @@ def main(argv=None, for_cli=False):
         help="Prioritize memory efficiency over speed (default: optimize for speed)"
     )
 
+    def _str2bool(s):
+        return str(s).lower() in ("1", "true", "yes", "on", "t")
+
+    parser.add_argument(
+        "--snap-kp",
+        type=_str2bool, default=True, metavar="BOOL",
+        help="Snap .nnkp k-points to the exact i/mp_grid rationals of the "
+             "Monkhorst-Pack grid (default: True). Keep the finite-digit "
+             "values with: --snap-kp false"
+    )
+
     parser.add_argument(
         "prefix",
         help="Prefix name of input/output files"
@@ -700,7 +711,7 @@ def main(argv=None, for_cli=False):
 
     args = parser.parse_args(argv)
 
-    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, log_level=args.log_level)
+    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, log_level=args.log_level, snap_kp=args.snap_kp)
     wann.run()
 
 
