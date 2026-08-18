@@ -128,12 +128,51 @@ class Mmn:
         self.kb2k = - np.ones([self.nk, self.nb], dtype=int)  # -1 becomes non-negative when defined
         ####### simple case (without symmetry) #######
         if self.sym is None:
-            for ik, ib in itertools.product(range(self.nk), range(self.nb)):
-                assert ik == self.kpb_info[ik,ib,0]-1
-                bvec = self.nnkp.calc_bvec(self.kpb_info[ik,ib,:])
-                ibt = self.nnkp.bvec_num(bvec)
-                assert ibt == ib
-                self.kb2k[ik,ib] = self.kpb_info[ik,ib,1] - 1
+            # Reorder one k-point at a time to avoid duplicating the full
+            # MMN array, which can be large for many bands and k-points.
+            for ik in range(self.nk):
+                mmn_ik = self.mmn[ik, :, :, :].copy()
+                kpb_info_ik = self.kpb_info[ik, :, :].copy()
+                found = np.zeros(self.nb, dtype=bool)
+
+                for ib in range(self.nb):
+                    info = kpb_info_ik[ib, :]
+                    bvec = self.nnkp.calc_bvec(info)
+                    matches = [
+                        ibt for ibt in range(self.nb)
+                        if np.allclose(self.nnkp.bvec[ibt, :], bvec)
+                    ]
+                    if len(matches) != 1:
+                        raise ValueError(
+                            f"MMN block ({ik + 1}, {ib + 1}) matches "
+                            f"{len(matches)} nnkp b-vectors"
+                        )
+
+                    ibt = matches[0]
+                    if found[ibt]:
+                        raise ValueError(
+                            f"duplicate MMN b-vector {ibt + 1} "
+                            f"at k-point {ik + 1}"
+                        )
+
+                    ikb = info[1] - 1
+                    if not 0 <= ikb < self.nk:
+                        raise ValueError(
+                            f"MMN block ({ik + 1}, {ib + 1}) has invalid "
+                            f"neighbor k-point {info[1]}"
+                        )
+
+                    found[ibt] = True
+                    self.mmn[ik, ibt, :, :] = mmn_ik[ib, :, :]
+                    self.kpb_info[ik, ibt, :] = info
+                    self.kb2k[ik, ibt] = ikb
+
+                if not np.all(found):
+                    missing = np.flatnonzero(~found)[0]
+                    raise ValueError(
+                        f"missing MMN b-vector {missing + 1} "
+                        f"at k-point {ik + 1}"
+                    )
 
         ####### symmetrized case #######
         else:
