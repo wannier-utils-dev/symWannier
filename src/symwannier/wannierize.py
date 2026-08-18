@@ -531,8 +531,22 @@ class Wannierize:
                 dis_proj_min = max(0.05, min(0.25, dis_proj_min - 0.01))
                 self.log.info(f"Auto-determined dis_proj_min = {dis_proj_min:.4f} (buffer={buffer} bands per k-point)")
 
-        self.index_froz = dis_proj_max <= self.projectability
-        self.index_win = dis_proj_min <= self.projectability
+        if not 0 <= dis_proj_min <= dis_proj_max <= 1:
+            raise ValueError("projectability thresholds must satisfy 0 <= dis_proj_min <= dis_proj_max <= 1")
+
+        energy_outer = ((self.eig.eig >= self.win.dis_win_min) &
+                        (self.eig.eig <= self.win.dis_win_max))
+        energy_frozen = np.zeros_like(energy_outer)
+        if self.win.has_dis_froz_window:
+            energy_frozen = ((self.eig.eig >= self.win.dis_froz_min) &
+                             (self.eig.eig <= self.win.dis_froz_max))
+
+        # Match Wannier90 dis_windows_proj: the outer energy window is always
+        # applied, while the frozen subspace is the union of the energy-frozen
+        # states and states above dis_proj_max. Energy-frozen states are kept
+        # even if their projectability is below dis_proj_min.
+        self.index_froz = energy_outer & (energy_frozen | (self.projectability >= dis_proj_max))
+        self.index_win = energy_outer & (energy_frozen | (self.projectability >= dis_proj_min))
         self.index_nfroz = self.index_win & (~self.index_froz)
         self.len_nfroz = np.array([np.sum(self.index_nfroz[k, :]) for k in range(self.nk)])
         self.ndimwin = np.array([np.sum(self.index_win[k, :]) for k in range(self.nk)])
