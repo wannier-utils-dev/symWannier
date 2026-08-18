@@ -50,7 +50,9 @@ Run wannier90 as usual.
 wannier90.x prefix
 ```
 
-There are sample input and script files, in examples/Cu and examples/Fe.
+There are sample input and script files in `examples/Cu`, `examples/Fe`,
+`examples/Fe_atom_proj`, `examples/Ni_atom_proj`, and
+`examples/Ni_atom_proj_ext`.
 
 
 ## Symmetry adapted Wannier functions
@@ -64,6 +66,14 @@ To construct symmetry-adapted Wannier functions, use the "-S" option instead of 
 symwannier wannierize -S prefix
 ```
 
+
+## Bundled pw2wannier90 interfaces
+
+Patched `pw2wannier90.f90` sources are provided under `src/pw2wannier90`.
+The `qe7.6` version supports the `atom_proj` workflow, including projector
+exclusion, UPF projectors, external projectors, and IBZ expansion for
+SymWannier. The 4 x 4 x 4 regression inputs are in `examples/Fe_atom_proj`,
+`examples/Ni_atom_proj`, and `examples/Ni_atom_proj_ext`.
 
 ## Paper
 
