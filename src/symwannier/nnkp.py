@@ -9,7 +9,7 @@ import os
 
 class Nnkp:
     """Reader for nnkp files (neighbor k-point information from wannier90)."""
-    def __init__(self, file_nnkp, log=None):
+    def __init__(self, file_nnkp, log=None, snap_kp=True):
         """Parse nnkp file and compute b-vector list.
 
         Parameters
@@ -18,6 +18,9 @@ class Nnkp:
             Path to nnkp file.
         log : logging.Logger, optional
             Logger instance.
+        snap_kp : bool, optional
+            Snap the k-points to the exact i/mp_grid rationals of the
+            Monkhorst-Pack grid (default: True). See ``_snap_kpoints``.
         """
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
@@ -25,7 +28,38 @@ class Nnkp:
 
         self.read_file(file_nnkp)
 
+        if snap_kp:
+            self._snap_kpoints()
+
         self.calc_bvec_list()
+
+    def _snap_kpoints(self):
+        """Snap the k-points to the exact rationals of a Gamma-centered grid.
+
+        wannier90 writes the .nnkp k-points at a fixed 8-decimal format, so a
+        value such as 1/12 is stored as 0.08333333 (~3e-9 below the exact
+        double). On a (possibly half-shifted) Monkhorst-Pack grid the exact
+        k-points are (2*i + s)/(2*N); we recover them by rounding k*2N to the
+        nearest integer. This restores the bit-exact double used internally by
+        the DFT code and avoids a ~1e-5 error in the H(k)<->H(R) Fourier
+        transforms (write_hr/write_tb). Non-standard grids are left unchanged.
+        """
+        k = self.kpoints
+        # infer the grid size per direction from the number of distinct values
+        n = np.array([len(np.unique(np.round(k[:, d], 6))) for d in range(3)])
+        two_n = 2 * n
+        m = np.round(k * two_n)                      # = 2*i + shift (integers)
+        resid = np.max(np.abs(k * two_n - m))        # distance from the integers
+        if resid < 1e-10:
+            return                                   # already exact (e.g. dyadic grid)
+        if resid > 1e-4:
+            self.log.info("  Note: k-points are not on a standard Monkhorst-Pack "
+                          "grid; leaving them unchanged (--snap-kp).")
+            return
+        self.log.info("  Note: snapping .nnkp k-points to exact i/mp_grid rationals "
+                      "(finite-digit output, residual %.1e). Disable with "
+                      "--snap-kp false.", resid)
+        self.kpoints = m / two_n
 
 
     def read_file(self, file_nnkp):
