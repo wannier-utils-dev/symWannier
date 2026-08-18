@@ -1,0 +1,12 @@
+! Ni atom_proj_ext + atom_proj_exclude regression sample
+&inputpp
+  prefix = 'pwscf'
+  outdir = './work'
+  seedname = 'pwscf'
+  irr_bz = .true.
+  write_unk = .false.
+  atom_proj = .true.
+  atom_proj_ext = .true.
+  atom_proj_dir = './atom_proj'
+  atom_proj_exclude = 2, 6, 7, 8, 14, 15, 16, 17, 18
+/

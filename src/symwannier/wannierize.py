@@ -42,13 +42,15 @@ class Wannierize:
     optimize_memory_usage : bool, optional
         If True, prioritize memory efficiency over speed (default: False).
         If False (default), prioritize speed (may use more memory). 
+    projectability_disentangle : bool, optional
+        If True, build disentanglement windows from AMN projectability instead of energy windows.
     log_level : int or str, optional
         Logging level (e.g., logging.DEBUG, logging.INFO, or 'DEBUG', 'INFO').
     log : logging.Logger, optional
         Logger to use; if not provided a module logger is created.
     """
 
-    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, log_level=None, log=None, snap_kp=True):
+    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, projectability_disentangle=False, log_level=None, log=None, snap_kp=True):
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
             # Determine log level
@@ -63,12 +65,14 @@ class Wannierize:
         self.prefix = prefix
         self.time = TimeData(log=self.log)
         self.win = Win(prefix, log=self.log)
+        self.log.debug(f"Loaded win: num_wann={self.win.num_wann}")
         self.nnkp = Nnkp(prefix + ".nnkp", log=self.log, snap_kp=snap_kp)
         self.log.debug(f"Loaded nnkp: nk={self.nnkp.nk}, nb={self.nnkp.nb}, num_wann={self.nnkp.num_wann}")
         self.lsym = lsym
         self.lsite_sym = lsite_sym
         self.prec = prec
         self.optimize_memory_usage = optimize_memory_usage
+        self.projectability_disentangle = projectability_disentangle
         if self.lsite_sym:
             self.lsym = True
 
@@ -89,7 +93,7 @@ class Wannierize:
 
         self.mmn0 = mmn.mmn
         self.num_bands = mmn.num_bands
-        self.num_wann = self.nnkp.num_wann
+        self.num_wann = self.win.num_wann
         self.nk = self.nnkp.nk
         self.kpts = self.nnkp.kpoints
         self.nb = self.nnkp.nb
@@ -102,6 +106,23 @@ class Wannierize:
         self.time.stop_clock("amn read")
         self.eig = Eig(prefix+"." + ext + "eig", sym=self.sym, log=self.log)
         self.log.debug(f"Loaded Amn: shape={self.amn.amn.shape}, Eig: shape={self.eig.eig.shape}")
+        # Projectability p_mk = sum_n |<psi_mk|g_n>|^2 for optional disentanglement mode
+        self.projectability = np.einsum(
+            "knm,knm->kn", self.amn.amn, np.conj(self.amn.amn), optimize=True
+        ).real
+        is_finite = np.isfinite(self.projectability)
+        num_nan = np.isnan(self.projectability).sum()
+        num_inf = np.isinf(self.projectability).sum()
+        num_neg = (self.projectability < 0).sum()
+        self.log.info(
+            "projectability stats: "
+            f"min={np.min(self.projectability):.6e}, max={np.max(self.projectability):.6e}, "
+            f"nan={num_nan}, inf={num_inf}, neg={num_neg}"
+        )
+        if not is_finite.all():
+            raise ValueError("projectability contains NaN or inf")
+        if num_neg != 0:
+            raise ValueError("projectability contains negative values")
         self._validate_inputs()
         self.Umat_opt = None
 
@@ -120,7 +141,10 @@ class Wannierize:
         self.log.info("Starting wannierization for prefix '%s' (lsym=%s, lsite_sym=%s)", self.prefix, self.lsym, self.lsite_sym)
         # disentanglement. minimize omega_I
         if self.disentangle:
-            self.dis_window()
+            if self.projectability_disentangle:
+                self.dis_window_projectability()
+            else:
+                self.dis_window()
             self.dis_project()
             self.dis_extract()
 
@@ -458,6 +482,78 @@ class Wannierize:
         self.ndimfroz = np.array([ np.sum(self.index_froz[k,:]) for k in range(self.nk) ])
         self.log.debug(f"dis_window: ndimwin min={np.min(self.ndimwin)}, max={np.max(self.ndimwin)}, ndimfroz min={np.min(self.ndimfroz)}, max={np.max(self.ndimfroz)}")
 
+    def dis_window_projectability(self, dis_proj_max = None, dis_proj_min = None):
+        """Define disentanglement windows using projectability from Amn overlaps.
+
+        The projectability of each Bloch state is p_mk = sum_n |<psi_mk|g_n>|^2.
+        Bands with high projectability are frozen; the outer window collects the
+        best-projected bands until a reasonable buffer over num_wann is reached.
+        
+        If dis_proj_max is not specified, it is automatically determined by:
+        - Sorting all bands by projectability across all k-points
+        - Freezing approximately 70-80% of num_wann bands with highest projectability
+        - Leaving room for disentanglement to optimize the remaining bands
+        """
+        proj = self.projectability
+        if dis_proj_max is not None and 0 <= dis_proj_max <= 1:
+            self.log.info(f"Using user-specified dis_proj_max = {dis_proj_max:.4f}")
+        else:
+            if hasattr(self.win, "dis_proj_max"):
+                dis_proj_max = self.win.dis_proj_max
+                self.log.info(f"Using win-specified dis_proj_max = {dis_proj_max:.4f}")
+            else:
+                # Smart determination: freeze ~75% of num_wann to leave room for disentanglement
+                # This balances stability (frozen bands) with flexibility (optimizable bands)
+                proj_flat = proj.flatten()
+                proj_sorted = np.sort(proj_flat)[::-1]  # descending order
+                num_frozen_target = int(0.75 * self.num_wann * self.nk)
+                idx_cutoff = min(num_frozen_target, len(proj_sorted) - 1)
+                dis_proj_max = proj_sorted[idx_cutoff]
+                # Add small margin to avoid floating point issues
+                dis_proj_max = max(0.90, dis_proj_max - 0.01)
+                self.log.info(f"Auto-determined dis_proj_max = {dis_proj_max:.4f} (targeting ~75% of num_wann as frozen)")
+        
+        if dis_proj_min is not None and 0 <= dis_proj_min <= 1:
+            self.log.info(f"Using user-specified dis_proj_min = {dis_proj_min:.4f}")
+        else:
+            if hasattr(self.win, "dis_proj_min"):
+                dis_proj_min = self.win.dis_proj_min
+                self.log.info(f"Using win-specified dis_proj_min = {dis_proj_min:.4f}")
+            else:
+                # Smart determination: include enough bands for disentanglement
+                # Typically want num_wann + buffer bands in the window
+                buffer = min(self.num_wann // 2, self.num_bands - self.num_wann)
+                proj_flat = proj.flatten()
+                proj_sorted = np.sort(proj_flat)[::-1]  # descending order
+                idx_cutoff = min(self.num_wann + buffer * self.nk, len(proj_sorted) - 1)
+                dis_proj_min = proj_sorted[idx_cutoff]
+                # Ensure minimum threshold is reasonable
+                dis_proj_min = max(0.05, min(0.25, dis_proj_min - 0.01))
+                self.log.info(f"Auto-determined dis_proj_min = {dis_proj_min:.4f} (buffer={buffer} bands per k-point)")
+
+        if not 0 <= dis_proj_min <= dis_proj_max <= 1:
+            raise ValueError("projectability thresholds must satisfy 0 <= dis_proj_min <= dis_proj_max <= 1")
+
+        energy_outer = ((self.eig.eig >= self.win.dis_win_min) &
+                        (self.eig.eig <= self.win.dis_win_max))
+        energy_frozen = np.zeros_like(energy_outer)
+        if self.win.has_dis_froz_window:
+            energy_frozen = ((self.eig.eig >= self.win.dis_froz_min) &
+                             (self.eig.eig <= self.win.dis_froz_max))
+
+        # Match Wannier90 dis_windows_proj: the outer energy window is always
+        # applied, while the frozen subspace is the union of the energy-frozen
+        # states and states above dis_proj_max. Energy-frozen states are kept
+        # even if their projectability is below dis_proj_min.
+        self.index_froz = energy_outer & (energy_frozen | (self.projectability >= dis_proj_max))
+        self.index_win = energy_outer & (energy_frozen | (self.projectability >= dis_proj_min))
+        self.index_nfroz = self.index_win & (~self.index_froz)
+        self.len_nfroz = np.array([np.sum(self.index_nfroz[k, :]) for k in range(self.nk)])
+        self.ndimwin = np.array([np.sum(self.index_win[k, :]) for k in range(self.nk)])
+        self.ndimfroz = np.array([np.sum(self.index_froz[k, :]) for k in range(self.nk)])
+        self.log.info(f"num_inner (min, max, mean): {np.min(self.ndimfroz)}, {np.max(self.ndimfroz)}, {np.mean(self.ndimfroz)}")
+        self.log.info(f"num_outer (min, max, mean): {np.min(self.ndimwin)}, {np.max(self.ndimwin)}, {np.mean(self.ndimwin)}")
+
     def dis_project(self):
         """Calculate self.Umat_opt and update mmn0 from amn file."""
         self.log.debug("dis_project: starting projection")
@@ -705,13 +801,19 @@ def main(argv=None, for_cli=False):
     )
 
     parser.add_argument(
+        "-P", "--projectability-disentangle",
+        action="store_true",
+        help="Use AMN projectability to define disentanglement windows instead of energy windows"
+    )
+
+    parser.add_argument(
         "prefix",
         help="Prefix name of input/output files"
     )
 
     args = parser.parse_args(argv)
 
-    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, log_level=args.log_level, snap_kp=args.snap_kp)
+    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, projectability_disentangle=args.projectability_disentangle, log_level=args.log_level, snap_kp=args.snap_kp)
     wann.run()
 
 

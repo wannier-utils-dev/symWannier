@@ -39,9 +39,17 @@ class Win:
             self.dis_num_iter = 0
         self.num_iter = self._get_param_keyword("num_iter", 200, dtype=int)
         self.dis_froz_min = self._get_param_keyword("dis_froz_min", -100000, dtype=float)
-        self.dis_froz_max = self._get_param_keyword("dis_froz_max", +100000, dtype=float)
+        dis_froz_max = self._get_param_keyword("dis_froz_max", None, dtype=float)
+        self.has_dis_froz_window = dis_froz_max is not None
+        self.dis_froz_max = +100000 if dis_froz_max is None else dis_froz_max
         self.dis_win_min = self._get_param_keyword("dis_win_min", -100000, dtype=float)
         self.dis_win_max = self._get_param_keyword("dis_win_max", +100000, dtype=float)
+        dis_proj_min = self._get_param_keyword("dis_proj_min", None, dtype=float)
+        dis_proj_max = self._get_param_keyword("dis_proj_max", None, dtype=float)
+        if dis_proj_min is not None:
+            self.dis_proj_min = dis_proj_min
+        if dis_proj_max is not None:
+            self.dis_proj_max = dis_proj_max
         self.dis_mix_ratio = self._get_param_keyword("dis_mix_ratio", 0.5, dtype=float)
 
         p = self._get_param_keyword("mp_grid", dtype = str)

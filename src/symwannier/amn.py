@@ -36,6 +36,7 @@ class Amn():
 
         self.nnkp = nnkp
         self.sym = sym
+        self.projection_centers = None  # Will be initialized after reading amn
 
         fp, used_path = open_text_or_gz(file_amn, desc="amn file")
         self.log.debug(f"Reading amn from {used_path}")
@@ -54,6 +55,9 @@ class Amn():
         self.num_bands = num_bands
         self.num_wann = num_wann
 
+        # Initialize projection centers from sym.isym or nnkp.nw2r
+        self._init_projection_centers()
+
         ####### simple case (without symmetry) #######
         if self.sym is None:
             self.nk = nk
@@ -61,6 +65,11 @@ class Amn():
 
         ####### symmetrized case #######
         else:
+            if self.projection_centers is None:
+                raise ValueError(
+                    "sym is provided but no Wannier centers found in prefix.isym or prefix.nnkp. "
+                    "Either provide centers in .isym/.nnkp or disable symmetry (sym=None)."
+                )
             self.nk = self.sym.nkf
             amn = self.symmetrize_Gk(amn)
             self.amn = self.symmetrize_expand(amn)
@@ -212,9 +221,32 @@ class Amn():
 
         return Umat
 
+    def _init_projection_centers(self):
+        """Initialize projection centers from prefix.isym or prefix.nnkp."""
+        # Priority 1: sym.centers from .isym file if available
+        if (self.sym is not None and 
+            hasattr(self.sym, 'centers') and 
+            self.sym.centers is not None and
+            self.sym.centers.shape[0] == self.num_wann):
+            self.projection_centers = self.sym.centers
+            self.log.info("Using Wannier centers from isym")
+            return
+        
+        # Priority 2: Fall back to nnkp.nw2r from .nnkp file
+        if (self.nnkp is not None and
+            hasattr(self.nnkp, 'nw2r') and
+            self.nnkp.nw2r is not None and
+            self.nnkp.nw2r.shape[0] == self.num_wann):
+            self.projection_centers = self.nnkp.nw2r
+            self.log.info("Using Wannier centers from nnkp")
+            return
+        
+        # No centers available
+        self.projection_centers = None
+
     def projection_sym_mat(self):
         """Return rotation matrices and lattice shifts for projecting Wannier centers."""
-        pos = self.nnkp.nw2r     # pos[num_wann, 3]: position of each Wannier
+        pos = self.projection_centers
         Rmat = self.sym.rotmat   # Rotation matrix
 
         # calculate Rshift (Rotated Wannier center R - corresponding Wannier center)
