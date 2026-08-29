@@ -307,6 +307,11 @@ class Wannierize:
             Umat_irk = self.kd.allgather(self.Umat)[self.sym.iks2ik[:]]
             Umat_irk = self.amn.symmetrize_Gk(Umat_irk)
             self.Umat = self.kd.local(self.amn.symmetrize_expand(Umat_irk))
+            # Group averaging leaves U off the unitary manifold; H(k) is built
+            # as U^dagger diag(eps) U, so the deviation propagates straight
+            # into hr.dat / tb.dat and shows up as broken point-group symmetry.
+            # The projection acts on each k-point alone, so the local block will do
+            self.Umat = self.amn.nearest_unitary(self.Umat)
 
         self.mmn = self.update_Mmn_by_Umat(self.mmn0, self.Umat)
         self.calc_omega_detail(self.mmn)

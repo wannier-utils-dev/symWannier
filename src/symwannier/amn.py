@@ -164,6 +164,24 @@ class Amn():
                 Umat[ik,:,:] = np.conj(Umat[ik,:,:])
         return Umat
 
+    def nearest_unitary(self, Umat):
+        """Project each U(k) back onto the unitary manifold, in place.
+
+        Averaging unitary matrices over a little group does not preserve
+        unitarity, so every symmetrization has to be followed by this. The
+        SVD form u @ v is the unitary matrix closest to the input in the
+        Frobenius norm, which is the same construction used to build U from
+        Amn in the first place. max |sigma - 1| is how far the input was from
+        unitary; it is large where repmat is not unitary (see Sym.check_repmat).
+        """
+        dev = 0.0
+        for k in range(Umat.shape[0]):
+            u, s, v = scipy.linalg.svd(Umat[k, :, :], full_matrices=False)
+            Umat[k, :, :] = np.matmul(u, v)
+            dev = max(dev, np.max(np.abs(s - 1)))
+        self.log.info("nearest unitary: max |sigma - 1| = %.5e", dev)
+        return Umat
+
     def Umat_symmetrize(self, Umat, Umat_opt = None):
         """Symmetrize Umat (and optionally combine with disentanglement rotations)."""
         Umat_irk = Umat[self.sym.iks2ik[:]]
@@ -177,6 +195,7 @@ class Amn():
             Umat_irk = self.symmetrize_Gk(Umat_irk)
             Umat_new = self.symmetrize_expand(Umat_irk)
         self.log.info("symmetrize expand diff = %.5e", np.sum(np.abs(Umat_new - Umat))/self.nk)
+        Umat_new = self.nearest_unitary(Umat_new)
         return Umat_new
 
     def write_amn(self, file_amn):
@@ -199,7 +218,7 @@ class Amn():
         index_win : ndarray[bool], optional
             Disentanglement window mask per k and band. Outside window elements are zeroed.
         check : bool, optional
-            If True and no symmetry, verify unitarity per k-point.
+            If True, verify unitarity per k-point.
         Umat_opt : ndarray, optional
             Disentanglement rotations; if provided, Amn is rotated before SVD.
 
@@ -229,8 +248,9 @@ class Amn():
         if self.sym is not None:
             Umat = self.Umat_symmetrize( Umat, Umat_opt )
 
-        if check and self.sym is None:
-            # check Umat^\dagger Umat = I
+        if check:
+            # check Umat^\dagger Umat = I (also on the symmetrized path: the
+            # symmetrization is exactly what used to break it)
             for k in range(self.nk):
                 assert np.allclose( np.matmul(np.transpose(np.conj(Umat[k,:,:])), Umat[k,:,:]), np.eye(self.num_wann), atol=1e-5 ), "Umat is not unitary for k = {}".format(k)
 
