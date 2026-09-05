@@ -4,7 +4,6 @@ symwannier - Symmetry-adapted Wannier tools
 """
 
 import argparse
-import sys
 from symwannier import expand_wannier_inputs, wannierize
 
 def main():

@@ -4,8 +4,6 @@ import numpy as np
 import itertools
 import logging
 
-from symwannier.nnkp import Nnkp
-from symwannier.sym import Sym
 from symwannier.io_utils import open_text_or_gz
 
 class Mmn:
@@ -49,11 +47,12 @@ class Mmn:
             for ik, ib in itertools.product(range(self.nk), range(self.nb)):
                 k = self.sym.full_kpoints[ik]
                 b = self.nnkp.bvec_crys[ib]
-                ikb = self.sym.search_ik_full(k+b)
+                ikb = self.kb2k[ik,ib]
                 g = k + b - self.sym.full_kpoints[ikb]
                 fp.write("{0}  {1}  {2[0]}  {2[1]}  {2[2]}\n".format(ik+1, ikb+1, np.round(g).astype("int")))
-                for m, n in itertools.product( range(self.num_bands), repeat=2 ):
-                    fp.write("{0.real:18.12f}  {0.imag:18.12f}\n".format(self.mmn[ik,ib,n,m]))
+                # loop order: m (column) outer, n (row) inner  ->  mmn[ik,ib].T.ravel()
+                mmn_kb = self.mmn[ik,ib,:,:].T.ravel()
+                np.savetxt(fp, np.column_stack([mmn_kb.real, mmn_kb.imag]), fmt="%18.12f  %18.12f")
 
     def _read_mmn(self, fp, ibz):
         """Parse mmn file content and populate overlap matrices.
@@ -138,10 +137,7 @@ class Mmn:
                 for ib in range(self.nb):
                     info = kpb_info_ik[ib, :]
                     bvec = self.nnkp.calc_bvec(info)
-                    matches = [
-                        ibt for ibt in range(self.nb)
-                        if np.allclose(self.nnkp.bvec[ibt, :], bvec)
-                    ]
+                    matches = np.flatnonzero(np.all(np.isclose(self.nnkp.bvec, bvec), axis=1))
                     if len(matches) != 1:
                         raise ValueError(
                             f"MMN block ({ik + 1}, {ib + 1}) matches "

@@ -240,13 +240,15 @@ class Wannierize:
         ndarray, shape (nk, nb, num_wann, num_wann)
             Rotated overlap matrices.
         """
+        # U^k(dagger)[k,1,m,l] Mmn[k,b,l,p] U^(k+b)[k,b,p,n]; batched matmul uses BLAS
+        Umat_dag = np.conj(Umat).swapaxes(1, 2)[:, None, :, :]
         if not self.optimize_memory_usage:
             # Pre-compute indexed Umat for all k+b pairs to avoid repeated indexing
             Umat_kpb = Umat[self.kb2k.ravel()].reshape(self.nk, self.nb, Umat.shape[1], Umat.shape[2])
-            return np.einsum("klm, kblp, kbpn->kbmn", np.conj(Umat), mmn, Umat_kpb, optimize=True)
+            return np.matmul(np.matmul(Umat_dag, mmn), Umat_kpb)
         else:
             # Memory-efficient: re-index on each call (no pre-computation)
-            return np.einsum("klm, kblp, kbpn->kbmn", np.conj(Umat), mmn, Umat[self.kb2k[:,:],:,:], optimize=True)
+            return np.matmul(np.matmul(Umat_dag, mmn), Umat[self.kb2k[:,:],:,:])
 
     def init_Umat_and_Mmn(self):
         """
@@ -412,11 +414,8 @@ class Wannierize:
         ndarray, shape (nk, num_wann, num_wann)
             Unitary matrices exp(dW(k)).
         """
-        # Vectorized eigendecomposition for all k-points
-        e = np.empty((self.nk, self.num_wann), dtype=float)
-        v = np.empty((self.nk, self.num_wann, self.num_wann), dtype=complex)
-        for k in range(self.nk):
-            e[k], v[k] = scipy.linalg.eigh(1j*dw[k,:,:])
+        # Batched eigendecomposition for all k-points
+        e, v = np.linalg.eigh(1j*dw)
         # Vectorized matrix multiplication: V @ diag(exp(-i*lambda)) @ V^H
         exp_e = np.exp(-1j * e)  # (nk, num_wann)
         expdw = np.einsum("kab,kb,kcb->kac", v, exp_e, np.conj(v), optimize=True)
@@ -477,9 +476,9 @@ class Wannierize:
         self.index_froz = (self.eig.eig > self.win.dis_froz_min) & (self.eig.eig < self.win.dis_froz_max)
         self.index_win = (self.eig.eig > self.win.dis_win_min) & (self.eig.eig < self.win.dis_win_max)
         self.index_nfroz = self.index_win & (~self.index_froz)
-        self.len_nfroz = np.array([ np.sum(self.index_nfroz[k,:]) for k in range(self.nk) ])
-        self.ndimwin = np.array([ np.sum(self.index_win[k,:]) for k in range(self.nk) ])
-        self.ndimfroz = np.array([ np.sum(self.index_froz[k,:]) for k in range(self.nk) ])
+        self.len_nfroz = np.sum(self.index_nfroz, axis=1)
+        self.ndimwin = np.sum(self.index_win, axis=1)
+        self.ndimfroz = np.sum(self.index_froz, axis=1)
         self.log.debug(f"dis_window: ndimwin min={np.min(self.ndimwin)}, max={np.max(self.ndimwin)}, ndimfroz min={np.min(self.ndimfroz)}, max={np.max(self.ndimfroz)}")
 
     def dis_window_projectability(self, dis_proj_max = None, dis_proj_min = None):
@@ -548,9 +547,9 @@ class Wannierize:
         self.index_froz = energy_outer & (energy_frozen | (self.projectability >= dis_proj_max))
         self.index_win = energy_outer & (energy_frozen | (self.projectability >= dis_proj_min))
         self.index_nfroz = self.index_win & (~self.index_froz)
-        self.len_nfroz = np.array([np.sum(self.index_nfroz[k, :]) for k in range(self.nk)])
-        self.ndimwin = np.array([np.sum(self.index_win[k, :]) for k in range(self.nk)])
-        self.ndimfroz = np.array([np.sum(self.index_froz[k, :]) for k in range(self.nk)])
+        self.len_nfroz = np.sum(self.index_nfroz, axis=1)
+        self.ndimwin = np.sum(self.index_win, axis=1)
+        self.ndimfroz = np.sum(self.index_froz, axis=1)
         self.log.info(f"num_inner (min, max, mean): {np.min(self.ndimfroz)}, {np.max(self.ndimfroz)}, {np.mean(self.ndimfroz)}")
         self.log.info(f"num_outer (min, max, mean): {np.min(self.ndimwin)}, {np.max(self.ndimwin)}, {np.mean(self.ndimwin)}")
 
@@ -584,7 +583,7 @@ class Wannierize:
         """
         update mmn0U = mmn0[num_bands, num_win] x Umat_opt[num_win, num_wann]
         """
-        self.mmn0U = np.einsum("kbml, kbln->kbmn", self.mmn0, self.Umat_opt[self.kb2k[:,:],:,:], optimize=True) # Eq. (61)
+        self.mmn0U = np.matmul(self.mmn0, self.Umat_opt[self.kb2k[:,:],:,:])  # Eq. (61)
 
     def init_zmatrix(self):
         """
@@ -597,12 +596,10 @@ class Wannierize:
         # zmat = mu x mu^\dagger
         zmat_froz = np.zeros([self.nk, self.num_bands, self.num_bands], dtype=complex)
         zmat_nfroz = np.zeros([self.nk, self.num_bands, self.num_bands], dtype=complex)
-        #for k in range(self.nk):
-        #    mmn0U_froz = np.compress(self.index_froz[k,:], self.mmn0U[k,:,:,:], axis=1)
-        #    zmat_froz[k, :self.ndimfroz[k], :self.ndimfroz[k]] = np.einsum("b, bml, bnl->mn", self.wb, mmn0U_froz, np.conj(mmn0U_froz), optimize=True)
-        #    mmn0U_nfroz = np.compress(self.index_nfroz[k,:], self.mmn0U[k,:,:,:], axis=1)
-        #    zmat_nfroz[k, :self.len_nfroz[k], :self.len_nfroz[k]] = np.einsum("b, bml, bnl->mn", self.wb, mmn0U_nfroz, np.conj(mmn0U_nfroz), optimize=True)
-        zmat = np.einsum("b, kbml, kbnl->kmn", self.wb, self.mmn0U, np.conj(self.mmn0U), optimize=True)
+        # zmat[k,m,n] = sum_{b,l} wb[b] mu[k,b,m,l] conj(mu[k,b,n,l]); contract over (b,l) with batched matmul
+        mu = self.mmn0U.transpose(0, 2, 1, 3).reshape(self.nk, self.num_bands, -1)
+        mu_wb = (self.mmn0U * self.wb[None, :, None, None]).transpose(0, 2, 1, 3).reshape(self.nk, self.num_bands, -1)
+        zmat = np.matmul(mu_wb, np.conj(mu).swapaxes(1, 2))
         for k in range(self.nk):
             zmat_froz[k,:self.ndimfroz[k],:self.ndimfroz[k]] = zmat[k, self.index_froz[k,:], :][:, self.index_froz[k,:]]
             zmat_nfroz[k,:self.len_nfroz[k],:self.len_nfroz[k]] = zmat[k, self.index_nfroz[k,:], :][:, self.index_nfroz[k,:]]
@@ -610,7 +607,7 @@ class Wannierize:
         return zmat_froz, zmat_nfroz
 
     def calc_womegaI(self):
-        mmn = np.einsum("kml,kbmn->kbln", np.conj(self.Umat_opt), self.mmn0U, optimize=True)
+        mmn = np.matmul(np.conj(self.Umat_opt).swapaxes(1, 2)[:, None, :, :], self.mmn0U)
         return self.num_wann * np.sum(self.wb) - np.einsum("b,kbmn,kbmn->", self.wb, mmn, np.conj(mmn), optimize=True).real/self.nk
 
     def dis_extract(self):
@@ -620,10 +617,8 @@ class Wannierize:
                 # update zmatrix
                 zmat_nfroz = self.win.dis_mix_ratio * zmat_nfroz + (1-self.win.dis_mix_ratio) * zmat_nfroz_old
 
-            wkomegaI1 = self.num_wann * np.sum(self.wb) * np.ones([self.nk])
-
-            for k in range(self.nk):
-                wkomegaI1[k] -= np.trace(zmat_froz[k, :self.ndimfroz[k], :self.ndimfroz[k]]).real
+            # zmat_froz is zero outside the frozen block, so the full trace equals the block trace
+            wkomegaI1 = self.num_wann * np.sum(self.wb) - np.trace(zmat_froz, axis1=1, axis2=2).real
 
             for k in range(self.nk):
                 # Here, we consider -Z because we need eigvals of Z in descending order
@@ -669,12 +664,20 @@ class Wannierize:
         # check sum rule
         assert np.sum(1/self.ndegen) - np.prod(mp_grid) < 1e-8, "error in finding Wigner-Seitz points"
 
-    def write_hr(self):
-        self.calc_irvec()
+    def calc_ham_r(self):
+        """Return H(R) = 1/Nk sum_k e^{-2 pi i k.R} U^k+ diag(e_k) U^k and the phase factors e^{-2 pi i k.R}.
 
+        Requires ``self.irvec`` (see ``calc_irvec``).
+        """
         ham_k = np.einsum("kni,kn,knj->kij", np.conj(self.Umat), self.eig.eig, self.Umat, optimize=True)
         kr = np.einsum("ka,ra->kr", self.kpts, self.irvec, optimize=True)
-        ham_r = np.einsum("kij,kr->ijr", ham_k, np.exp(-2 * np.pi * 1j * kr), optimize=True)/self.nk
+        fac = np.exp(-2 * np.pi * 1j * kr)
+        ham_r = np.einsum("kij,kr->ijr", ham_k, fac, optimize=True)/self.nk
+        return ham_r, fac
+
+    def write_hr(self):
+        self.calc_irvec()
+        ham_r, _ = self.calc_ham_r()
 
         t = datetime.datetime.now()
         with open(self.file_hr_dat, "w") as fp:
@@ -695,11 +698,7 @@ class Wannierize:
 
     def write_tb(self):
         self.calc_irvec()
-
-        ham_k = np.einsum("kni,kn,knj->kij", np.conj(self.Umat), self.eig.eig, self.Umat, optimize=True)
-        kr = np.einsum("ka,ra->kr", self.kpts, self.irvec, optimize=True)
-        fac = np.exp(-2 * np.pi * 1j * kr)
-        ham_r = np.einsum("kij,kr->ijr", ham_k, fac, optimize=True)/self.nk
+        ham_r, fac = self.calc_ham_r()
 
         mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
         imlnmnn = np.log(mnn).imag

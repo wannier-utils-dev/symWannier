@@ -62,13 +62,13 @@ class Win:
         data = None
         for line in self.lines:
             if line.startswith(keyword):
-                assert data == None, keyword + " is defined more than once"
+                assert data is None, keyword + " is defined more than once"
                 if len(line.split("=")) > 1:
                     data = line.split("=")[1]
                 elif len(line.split(":")) > 1:
                     data = line.split(":")[1]
-        if data == None:
+        if data is None:
             data = default_value
-        if data == None:
+        if data is None:
             return None
         return dtype(data)

@@ -2,13 +2,9 @@
 
 import numpy as np
 import scipy.linalg
-import os
 import itertools
-import gzip
 import logging
 
-from symwannier.nnkp import Nnkp
-from symwannier.sym import Sym
 from symwannier.io_utils import open_text_or_gz
 
 class Amn():
