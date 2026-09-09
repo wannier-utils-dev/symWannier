@@ -5,7 +5,6 @@ prefix.immn, prefix.iamn, prefix.ieig, prefix.isym => prefix.mmn, prefix.amn, pr
 """
 
 import sys
-import os
 import argparse
 import logging
 

@@ -1,13 +1,9 @@
 #!/usr/bin/env python
 
 import numpy as np
-import scipy.linalg
 import os
 import itertools
 import logging
-
-from symwannier.nnkp import Nnkp
-from symwannier.sym import Sym
 
 class Eig():
     """Reader for eig files (eigenvalues e_n(k))."""
@@ -45,10 +41,7 @@ class Eig():
         else:
             self.nk = self.sym.nkf
             self.num_bands = num_bands
-            self.eig = np.zeros([self.nk, self.num_bands])
-            for ik, k in enumerate(self.sym.full_kpoints):
-                iks = self.sym.equiv[ik]
-                self.eig[ik,:] = eig[iks,:]
+            self.eig = eig[self.sym.equiv, :]
 
     def write_eig(self, file_eig):
         """Write eigenvalues to file in wannier90 format.

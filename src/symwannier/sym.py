@@ -26,6 +26,7 @@ class Sym:
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
             logging.basicConfig(level=logging.INFO, format="%(message)s")
+        self._symop_cache = {}
         self._read_sym_file(file_sym)
         self._kpoint_grid(nnkp)
         self.uspin_T = np.array([ [0, 1], [-1, 0] ])  # -i sigma_y
@@ -146,28 +147,20 @@ class Sym:
         equiv = - np.ones( [ nkf ], dtype=int )
         equiv_sym = np.zeros( [ nkf ], dtype=int )
         iks2ik = - np.ones([ len(self.irr_kpoints) ], dtype=int )
+        # sks[iks, isym, :] = (-1)^t_rev s[isym] . irr_k[iks]
+        sks = np.einsum("sab,kb->ksa", self.s, self.irr_kpoints)
+        sks[:, self.t_rev == 1, :] *= -1
         for ik, k in enumerate(full_klist):
-            for iks, ks in enumerate(self.irr_kpoints):
-                kdiff = k - ks
-                if np.allclose(kdiff, np.round(kdiff)):
-                    iks2ik[iks] = ik
-                for isym, s in enumerate(self.s):
-                    sks = np.dot(s, ks)
-                    if self.t_rev[isym] == 1 : sks = -sks
-                    kdiff = sks - k
-                    if np.allclose(kdiff, np.round(kdiff)):
-                        if equiv[ik] < 0:
-                            equiv[ik] = iks
-                            equiv_sym[ik] = isym
-                            #if np.any(np.abs(kdiff) > 1e-5):
-                            #    print("Warning: first isym's kdiff /= 0")
-                            #    print(ks)
-                            #    print(np.dot(s, ks))
-                            #    print(k)
-                        elif equiv[ik] == iks:
-                            continue
-                        else:
-                            raise Exception("k corresponds to two different irr. kpoints")
+            kdiff = k - self.irr_kpoints
+            iks2ik[ np.all(np.isclose(kdiff, np.round(kdiff)), axis=1) ] = ik
+            kdiff = sks - k
+            match = np.all(np.isclose(kdiff, np.round(kdiff)), axis=2)   # [nks, nsym]
+            iks_list = np.flatnonzero(np.any(match, axis=1))
+            if len(iks_list) > 1:
+                raise Exception("k corresponds to two different irr. kpoints")
+            if len(iks_list) == 1:
+                equiv[ik] = iks_list[0]
+                equiv_sym[ik] = np.argmax(match[iks_list[0]])   # first matching isym
         if np.any(equiv < 0):
             raise Exception("some k points do not correspond to irr. kpoints")
         if np.any(iks2ik < 0):
@@ -231,10 +224,10 @@ class Sym:
         """
         return ik such that full_kpoints[ik] = k
         """
-        for ik, kf in enumerate(self.full_kpoints):
-            kdiff = kf - k
-            if np.allclose(kdiff, np.round(kdiff), atol=1e-5):
-                return ik
+        kdiff = self.full_kpoints - k
+        match = np.flatnonzero(np.all(np.isclose(kdiff, np.round(kdiff), atol=1e-5), axis=1))
+        if len(match) > 0:
+            return match[0]
         print("k is not found", k)
         return -1
 
@@ -255,6 +248,13 @@ class Sym:
         # r' = r s0 - t0
         # r'' = r' s1 - t1 = (r s0 - t0) s 1 - t1 = r s0 s1 - t0 s1 - t1
         #
+        # the result depends only on sym_list, so cache it
+        key = tuple(tuple(x) for x in sym_list)
+        if key not in self._symop_cache:
+            self._symop_cache[key] = self._search_symop(sym_list)
+        return self._symop_cache[key]
+
+    def _search_symop(self, sym_list):
         # setup s0, t0, u0, t_rev
         s0 = np.eye(3, dtype=int)
         t0 = np.zeros([3])
@@ -317,14 +317,15 @@ class Sym:
         """
         if the eigen value of repmat is not integer, rescale it
         """
-        for ik, isym in itertools.product(range(self.nks), range(self.nsym)):
-            for n in range(self.nbnd):
-                vall = np.sum(np.abs(self.repmat[ik, isym, n, :]))
-                val = np.abs(self.repmat[ik, isym, n, n])
-                if np.abs(vall - val) < 1e-8 and (not np.round(val) == 0):
-                    if np.abs(np.round(val) - val) > 0.1 and n < self.nbnd-1:
-                        print(ik, isym, n, self.repmat[ik,isym,n,n], val, np.round(val))
-                    self.repmat[ik, isym, n, n] *= np.round(val)/val
+        diag = np.einsum("ksnn->ksn", self.repmat)          # view of the diagonal
+        vall = np.sum(np.abs(self.repmat), axis=3)            # [nks, nsym, nbnd]
+        val = np.abs(diag)
+        rescale = (np.abs(vall - val) < 1e-8) & (np.round(val) != 0)
+        suspicious = rescale & (np.abs(np.round(val) - val) > 0.1)
+        suspicious[:, :, self.nbnd-1] = False
+        for ik, isym, n in np.argwhere(suspicious):
+            print(ik, isym, n, self.repmat[ik,isym,n,n], val[ik,isym,n], np.round(val[ik,isym,n]))
+        diag[rescale] *= np.round(val[rescale])/val[rescale]
 
         if debug_print:
             print("new repmat")
