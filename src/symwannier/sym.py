@@ -29,6 +29,7 @@ class Sym:
         self._symop_cache = {}
         self._read_sym_file(file_sym)
         self._kpoint_grid(nnkp)
+        self.check_repmat()
         self.uspin_T = np.array([ [0, 1], [-1, 0] ])  # -i sigma_y
         self.uspin_T_inv = np.array([ [0, -1], [1, 0] ])  # (-i sigma_y)^-1
 
@@ -219,6 +220,48 @@ class Sym:
 
         return equiv
 
+
+    def little_group(self, iks):
+        """
+        return the list of symmetry operations of the little group G_k
+        of the iks-th irreducible k-point, i.e. the operations with
+        (-1)^t_rev s[isym] . k = k up to a reciprocal lattice vector
+        """
+        k = self.irr_kpoints[iks]
+        sk = np.einsum("sab,b->sa", self.s, k)
+        sk[self.t_rev == 1] *= -1
+        kdiff = k - sk
+        return np.flatnonzero(np.all(np.isclose(kdiff, np.round(kdiff)), axis=1))
+
+    def check_repmat(self, thr=1e-6):
+        """
+        check that repmat is unitary on the little group of each irreducible k-point
+
+        repmat[iks,isym] represents isym in the space of the nbnd bands stored in the
+        file. When a degenerate multiplet is cut by nbnd, the stored block is only a
+        part of the true representation and is not unitary any more. The average over
+        G_k in Amn.symmetrize_Gk is then no longer a projector, so Amn (and Umat) of
+        the affected bands are not symmetrized but shrunk. Report where this happens.
+        """
+        for iks in range(self.nks):
+            isym_list = self.little_group(iks)
+            d = self.repmat[iks, isym_list, :, :]
+            # norm[h,n] = (D^dag D)_nn = norm kept by band n under operation h
+            norm = np.real(np.einsum("hmn,hmn->hn", np.conj(d), d, optimize=True))
+            worst = np.min(norm, axis=0)
+            bands = np.flatnonzero(worst < 1 - thr)
+            if len(bands) == 0:
+                continue
+            k = self.irr_kpoints[iks]
+            self.log.warning(
+                "  Warning: representation matrices are not unitary at irreducible "
+                "k-point %d, k = (%8.5f,%8.5f,%8.5f)", iks+1, k[0], k[1], k[2])
+            for n in bands:
+                self.log.warning(
+                    "           band %d keeps only %.4f of its norm under G_k; its "
+                    "degenerate multiplet is cut by num_bands = %d", n+1, worst[n], self.nbnd)
+            self.log.warning(
+                "           symmetrization of Amn/Umat is not exact for these bands")
 
     def search_ik_full(self, k):
         """
