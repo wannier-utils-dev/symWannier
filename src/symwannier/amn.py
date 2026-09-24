@@ -73,8 +73,9 @@ class Amn():
     def symmetrize_Gk(self, amn, thr=0):
         """Symmetrize Amn (or U) on irreducible k-points using site symmetry G_k."""
         amn_sym = self._symmetrize_Gk_internal(amn)
-        diff = np.sum(np.abs(amn_sym - amn))/self.sym.nks
-        self.log.info("symmetrize Gk diff1 = %.5e", diff)
+        norm = np.linalg.norm(amn)
+        diff = np.linalg.norm(amn_sym - amn) / norm if norm > 0 else 0.0
+        self.log.info("symmetrize Gk: relative change = %.5e", diff)
         
         #if thr > 0:
         #    for i in range(20):
@@ -99,14 +100,9 @@ class Amn():
         Rmat, Rshift, pos = self.projection_sym_mat()
         for ik, k in enumerate(self.sym.irr_kpoints):
             # for all h (h in G_k)
-            nh = 0
-            for isym, s in enumerate(self.sym.s):
-                sk = np.dot(s, k)
-                if self.sym.t_rev[isym] == 1 : sk = -sk
-                kdiff = k - sk
-                if not np.allclose(kdiff, np.round(kdiff)): continue
-
-                nh += 1
+            isym_list = self.sym.little_group(ik)
+            nh = len(isym_list)
+            for isym in isym_list:
                 # Rmat[isym,m,n] = <g_m| S^-1 |g_n>
                 phase2 = np.einsum("a,na->n", k, Rshift[isym, :, :], optimize=True)
                 phase = np.exp(-1j * 2*np.pi * phase2)
