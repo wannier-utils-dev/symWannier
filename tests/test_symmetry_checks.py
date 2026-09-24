@@ -63,3 +63,31 @@ def test_repmat_not_unitary_is_reported(test_data_dir, material, kpoint, bands, 
     d = sym.repmat[iks, sym.little_group(iks), :, :]
     norm = np.real(np.einsum("hmn,hmn->hn", np.conj(d), d))
     assert np.flatnonzero(np.min(norm, axis=0) < 1 - 1e-6).tolist() == [n - 1 for n in bands]
+
+
+def test_amn_is_checked_not_symmetrized_on_read(test_data_dir, caplog):
+    """Reading Amn expands the IBZ data but leaves the values as computed.
+
+    At the K point of graphene the multiplet of band 16 is cut by num_bands, so the
+    G_k average is not a projector there: it used to shrink that band by 39%. The
+    band must now keep the norm it has in the file.
+    """
+    from symwannier.amn import Amn
+
+    nnkp = Nnkp(file_nnkp=str(test_data_dir / "graphene.nnkp"))
+    sym = Sym(file_sym=str(test_data_dir / "graphene.isym"), nnkp=nnkp)
+    with caplog.at_level("WARNING"):
+        amn = Amn(file_amn=str(test_data_dir / "graphene.iamn"), nnkp=nnkp, sym=sym)
+
+    iks = np.flatnonzero(np.all(np.isclose(sym.irr_kpoints, [1/3, 1/3, 0.0]), axis=1))[0]
+    ik = sym.iks2ik[iks]
+
+    # values from the file; the expansion only mixes the projections, so the norm
+    # over the Wannier index is preserved
+    assert np.isclose(np.linalg.norm(amn.amn[ik, 15, :]), 0.045659, atol=1e-6)
+
+    # a band with a complete multiplet is unaffected either way
+    assert np.isclose(np.linalg.norm(amn.amn[ik, 2, :]), 0.526530, atol=1e-6)
+
+    # the deviation from G_k symmetry is reported
+    assert "Amn is not symmetric under G_k" in caplog.text

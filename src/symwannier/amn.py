@@ -67,8 +67,30 @@ class Amn():
                     "Either provide centers in .isym/.nnkp or disable symmetry (sym=None)."
                 )
             self.nk = self.sym.nkf
-            amn = self.symmetrize_Gk(amn)
+            self.check_symmetry_Gk(amn)
             self.amn = self.symmetrize_expand(amn)
+
+    def check_symmetry_Gk(self, amn, thr=1e-4):
+        """Check that Amn is invariant under the site symmetry G_k of the irreducible k-points.
+
+        Amn read from prefix.iamn is already G_k symmetric whenever the projections and
+        the wave functions written by pw2wannier90.x are consistent, so it is checked
+        here instead of being symmetrized: the G_k average would change it by ~1e-9 at
+        best, and where it does change it appreciably it is because repmat is not
+        unitary (see Sym.check_repmat), in which case the average shrinks the affected
+        bands instead of improving them.
+
+        Returns the relative deviation from G_k symmetry.
+        """
+        amn_sym = self._symmetrize_Gk_internal(amn)
+        norm = np.linalg.norm(amn)
+        diff = np.linalg.norm(amn_sym - amn) / norm if norm > 0 else 0.0
+        if diff > thr:
+            self.log.warning(
+                "  Warning: Amn is not symmetric under G_k (relative deviation %.5e)", diff)
+        else:
+            self.log.info("Amn G_k symmetry: relative deviation = %.5e", diff)
+        return diff
 
     def symmetrize_Gk(self, amn, thr=0):
         """Symmetrize Amn (or U) on irreducible k-points using site symmetry G_k."""
