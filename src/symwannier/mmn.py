@@ -39,6 +39,79 @@ class Mmn:
 
         self._mmn_full_klist()
 
+    def check_bands(self, eig=None, thr=1e-4):
+        """Find the bands the symmetry expansion cannot reproduce.
+
+        <u_mk|u_n,k+b> is by definition the adjoint of <u_n,k+b|u_mk>, so the
+        expanded Mmn has to satisfy M(k,b) = M(k+b,-b)^dagger. A band whose
+        degenerate multiplet is cut by num_bands breaks it: the symmetry mixes that
+        band with one that is not in the file. The identity holds for the bands
+        below the first such band and fails from there on, so the number of leading
+        bands that satisfy it is the number of bands the expansion reproduces.
+
+        Which bands those are changes from k-point to k-point, because a multiplet
+        that is cut at one k-point need not be degenerate at another, so num_bands
+        cannot be chosen to avoid the problem. An energy can: every band below the
+        returned ceiling is reproduced at every k-point, which is what the outer
+        disentanglement window (dis_win_max) has to stay below.
+
+        Parameters
+        ----------
+        eig : ndarray, optional
+            Eigenvalues of the full BZ, [nk, num_bands], used for the energy ceiling.
+        thr : float, optional
+            Tolerance on the identity.
+
+        Returns
+        -------
+        n_bands : ndarray[int]
+            Number of leading bands reproduced at each k-point.
+        e_max : float or None
+            Highest energy up to which every band is reproduced at every k-point;
+            None when no band is affected or when eig is not given.
+        """
+        bvec = self.nnkp.bvec_crys
+        opp = - np.ones([len(bvec)], dtype=int)
+        for i in range(len(bvec)):
+            for j in range(len(bvec)):
+                if np.allclose(bvec[i], -bvec[j]):
+                    opp[i] = j
+                    break
+        if np.any(opp < 0):
+            self.log.info("the b-vector shell has no -b for every b; skipping the band check")
+            return np.full([self.nk], self.num_bands), None
+
+        n_bands = np.full([self.nk], self.num_bands, dtype=int)
+        for ik in range(self.nk):
+            dev = np.max(np.abs(self.mmn[ik,:,:,:]
+                                - np.conj(self.mmn[self.kb2k[ik,:], opp, :, :]).transpose(0,2,1)), axis=0)
+            run = 0.0
+            for n in range(self.num_bands):
+                run = max(run, dev[n,:n+1].max(), dev[:n+1,n].max())
+                if run > thr:
+                    n_bands[ik] = n
+                    break
+
+        affected = np.flatnonzero(n_bands < self.num_bands)
+        if len(affected) == 0:
+            self.log.info("Mmn: the expansion reproduces all %d bands", self.num_bands)
+            return n_bands, None
+
+        e_max = None
+        if eig is not None:
+            covered = [ eig[ik, n_bands[ik]-1] for ik in affected if n_bands[ik] > 0 ]
+            # no energy is safe when some k-point has no reproduced band at all
+            e_max = min(covered) if len(covered) == len(affected) else None
+        self.log.warning(
+            "  Warning: the symmetry expansion does not reproduce the highest bands at "
+            "%d of %d k-points (as few as %d of %d bands); a degenerate multiplet is cut "
+            "by num_bands there", len(affected), self.nk, n_bands.min(), self.num_bands)
+        if e_max is not None:
+            self.log.warning(
+                "           every band below %.4f eV is reproduced at every k-point; keep "
+                "the outer window dis_win_max below that value", e_max)
+        return n_bands, e_max
+
     def write_mmn(self, file_mmn):
         """Write overlap matrices to file in wannier90 format."""
         with open(file_mmn, "w") as fp:
