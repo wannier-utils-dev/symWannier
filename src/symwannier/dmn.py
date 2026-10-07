@@ -20,7 +20,14 @@ class Dmn():
     expand_wannier_inputs.
 
     The dmn file has no place for an antiunitary operation, so only the spatial
-    operations of prefix.isym are used.
+    operations of prefix.isym are listed in it. Time reversal is not excluded by
+    that: what the file has to express is the connection between an irreducible
+    k-point and each member of its orbit, and for a spatial R that connection is
+    g2 g1^-1 with g1, g2 the operations symmetrize_expand used to define the two.
+    Its kind is t_rev(g1) + t_rev(g2), so it is linear when both are spatial and
+    also when both are time-reversed - the two conjugations then cancel and the
+    matrices are simply conjugated, which is how 16 of the 64 k-points of GaAs are
+    built. Only a mismatch cannot be expressed, and _build raises there.
 
     Note on the phase convention. The file this writes is not identical to the
     one pw2wannier90 writes for the same system, although it is equivalent. Both
