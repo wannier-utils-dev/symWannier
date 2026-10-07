@@ -133,6 +133,16 @@ class Wannierize:
             raise ValueError("projectability contains NaN or inf")
         if num_neg != 0:
             raise ValueError("projectability contains negative values")
+        # p_mk = sum_n |<psi_mk|g_n>|^2 is bounded by 1 only for orthonormal trial
+        # orbitals. The projections written by hand in the win file overlap, and then
+        # the thresholds dis_proj_min and dis_proj_max, which live in [0,1], mean
+        # nothing: everything with any weight ends up frozen.
+        self.projectability_orthonormal = np.max(self.projectability) <= 1 + 1e-6
+        if not self.projectability_orthonormal:
+            self.log.info(
+                "projectability reaches %.3f, so the projections are not orthonormal; "
+                "only the energy windows are meaningful for this calculation",
+                np.max(self.projectability))
         self._validate_inputs()
         self.Umat_opt = None
 
@@ -503,6 +513,13 @@ class Wannierize:
         - Freezing approximately 70-80% of num_wann bands with highest projectability
         - Leaving room for disentanglement to optimize the remaining bands
         """
+        if not self.projectability_orthonormal:
+            raise ValueError(
+                "projectability disentanglement needs orthonormal projections, and "
+                "p_mk = sum_n |<psi_mk|g_n>|^2 reaches {:.3f} here. Use the atom_proj "
+                "interface of pw2wannier90, which orthonormalizes the projectors, or "
+                "the energy windows instead.".format(np.max(self.projectability)))
+
         proj = self.projectability
         if dis_proj_max is not None and 0 <= dis_proj_max <= 1:
             self.log.info(f"Using user-specified dis_proj_max = {dis_proj_max:.4f}")
@@ -579,6 +596,12 @@ class Wannierize:
             # check hermiticity
             #assert np.sum(np.abs(cqpq - np.transpose(np.conj(cqpq)))) < 1e-5  # check hermiticity
 
+            if cqpq.shape[0] == 0:
+                # the outer window is empty, which the eigensolver reports as an
+                # opaque LAPACK error about the index range
+                raise ValueError(
+                    "the disentanglement window at k-point {} contains no state; "
+                    "widen dis_win_min / dis_win_max".format(k+1))
             e, v = scipy.linalg.eigh(-cqpq)  # "-" sign for descending order
             self.Umat_opt[k,:,:] = 0
             self.Umat_opt[k, self.index_froz[k,:], :self.ndimfroz[k]] = np.identity(self.ndimfroz[k])
