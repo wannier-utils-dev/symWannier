@@ -56,6 +56,56 @@ def test_spin_rotation_is_a_rotation(test_data_dir):
         assert np.isclose(abs(np.linalg.det(rot)), 1.0, atol=1e-10)
 
 
+def test_pure_time_reversal_flips_the_spin(test_data_dir):
+    """For the operation that is time reversal alone, the matrix has to be -1.
+
+    It is the statement that time reversal flips the spin, and it pins the sign
+    convention of the antiunitary case: the rotation of the spinor matrix -i sigma_y
+    is diag(-1,+1,-1) on its own, and only the complex conjugation of the operator,
+    which flips sigma_y, turns it into -1 on every component.
+    """
+    spn, sym, _ = read_spn(test_data_dir, "Sn", expand=False)
+    spn.sym = sym
+
+    pure = [isym for isym in range(sym.nsym)
+            if np.array_equal(sym.s[isym], np.eye(3, dtype=int))
+            and np.allclose(sym.ft[isym], 0) and sym.t_rev[isym] == 1]
+    assert len(pure) == 1
+    assert np.allclose(spn.spin_rotation(pure[0]), -np.eye(3), atol=1e-10)
+
+
+def test_time_reversed_representative_gives_the_same_spn(test_data_dir):
+    """Which operation represents a k-point is a gauge choice, and Spn has to agree.
+
+    The bundled data reaches every k-point without time reversal, so the antiunitary
+    branch is never taken on its own. Forcing it at every k-point has to leave the
+    trace, which does not depend on the band basis, where it was.
+    """
+    nnkp = Nnkp(file_nnkp=str(test_data_dir / "Sn.nnkp"))
+    sym = Sym(file_sym=str(test_data_dir / "Sn.isym"), nnkp=nnkp)
+    spn = Spn(file_spn=str(test_data_dir / "Sn.ispn"), nnkp=nnkp, sym=sym)
+
+    alt = Sym(file_sym=str(test_data_dir / "Sn.isym"), nnkp=nnkp)
+    switched = 0
+    for ik, k in enumerate(alt.full_kpoints):
+        ks = alt.irr_kpoints[alt.equiv[ik]]
+        for isym in range(alt.nsym):
+            if alt.t_rev[isym] == 0:
+                continue
+            kdiff = -np.dot(alt.s[isym], ks) - k
+            if np.allclose(kdiff, np.round(kdiff)):
+                alt.equiv_sym[ik] = isym
+                switched += 1
+                break
+    assert switched == alt.nkf
+    spn_alt = Spn(file_spn=str(test_data_dir / "Sn.ispn"), nnkp=nnkp, sym=alt)
+
+    n_gapped = 8
+    tr = np.einsum("kamm->ka", spn.spn[:, :, :n_gapped, :n_gapped]).real
+    tr_alt = np.einsum("kamm->ka", spn_alt.spn[:, :, :n_gapped, :n_gapped]).real
+    assert np.allclose(tr, tr_alt, atol=1e-9)
+
+
 def test_spn_expansion(test_data_dir):
     """Expanding to the full BZ rotates the spin operator and leaves the bands alone."""
     raw, sym, nnkp = read_spn(test_data_dir, "Sn", expand=False)

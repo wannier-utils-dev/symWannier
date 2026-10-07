@@ -23,9 +23,16 @@ class Spn():
         S_a(g k) = sum_b A(g)_ab S_b(k)
 
     with A(g) the rotation the spinor matrix of g induces on the Pauli matrices.
-    An operation with time reversal reverses the spin and conjugates,
+    An operation with time reversal is antiunitary and conjugates the matrix
+    elements,
 
-        S_a(g k) = - sum_b A(g)_ab conj(S_b(k)).
+        S_a(g k) = sum_b A(g)_ab conj(S_b(k)),
+
+    where A(g) then carries an extra diag(1,-1,1): the conjugation of the operator
+    itself turns u^dagger sigma_a u into its complex conjugate, and sigma_y is the
+    only Pauli matrix that changes sign under that. For pure time reversal, where
+    the spinor matrix is -i sigma_y, the two factors combine to -1 on every
+    component, which is the familiar statement that time reversal flips the spin.
     """
 
     def __init__(self, file_spn, nnkp, sym=None, log=None):
@@ -91,11 +98,17 @@ class Spn():
             self.spn = self.symmetrize_expand(spn)
 
     def spin_rotation(self, isym):
-        """Rotation the symmetry operation induces on the Pauli matrices.
+        """Matrix that takes Spn through the symmetry operation.
 
-        Returns the real 3x3 matrix A with u^dagger sigma_a u = sum_b A_ab sigma_b,
-        u being the spinor matrix of the operation. For an operation with time
-        reversal the spinor matrix is the one search_symop composes, u_T conj(u).
+        Returns the real 3x3 matrix M with
+
+            S_a(g k) = sum_b M_ab S_b(k)              (g unitary)
+            S_a(g k) = sum_b M_ab conj(S_b(k))       (g antiunitary)
+
+        M is u^dagger sigma_a u expanded in the Pauli matrices, u being the spinor
+        matrix of the operation - for an operation with time reversal the one
+        search_symop composes, u_T conj(u) - followed by diag(1,-1,1) in the
+        antiunitary case, which is the complex conjugation of the operator itself.
         """
         u = self.sym.u_spin[isym]
         if self.sym.t_rev[isym] == 1:
@@ -104,7 +117,10 @@ class Spn():
                            [[0, -1j], [1j, 0]],
                            [[1, 0], [0, -1]] ], dtype=complex)
         rot = np.einsum("alm,mn,bnp,pl->ab", sigma, np.conj(u).T, sigma, u, optimize=True) / 2
-        return np.real(rot)
+        rot = np.real(rot)
+        if self.sym.t_rev[isym] == 1:
+            rot = rot * np.array([1.0, -1.0, 1.0])     # conj(sigma_y) = -sigma_y
+        return rot
 
     def symmetrize_expand(self, spn_irk):
         """Generate Spn(full_k) from Spn(irr_k).
@@ -119,8 +135,8 @@ class Spn():
             isym = self.sym.equiv_sym[ik]
             rot = self.spin_rotation(isym)
             if self.sym.t_rev[isym] == 1:
-                # time reversal reverses the spin and conjugates the matrix elements
-                spn[ik] = - np.einsum("ab,bmn->amn", rot, np.conj(spn_irk[iks]), optimize=True)
+                # an antiunitary operation conjugates the matrix elements
+                spn[ik] = np.einsum("ab,bmn->amn", rot, np.conj(spn_irk[iks]), optimize=True)
             else:
                 spn[ik] = np.einsum("ab,bmn->amn", rot, spn_irk[iks], optimize=True)
         return spn
