@@ -30,7 +30,8 @@ class Dmn():
     centers; they differ by one scalar of modulus one per (operation, k-point).
     That scalar cancels in every use wannier90 makes of the file, because the
     relation above and everything built on it are invariant under
-    (d, D) -> (lambda d, lambda D), and the final spreads agree to 1e-9. Of the
+    (d, D) -> (lambda d, lambda D) - d and D appear in a lambda/lambda* pair in
+    every one of them - and the final spreads agree to 6e-09. Of the
     48 operations of diamond, 36 of the scalars are a constant lattice offset,
     42 are that plus the phase an umklapp picks up from the fractional
     translation, and the remaining 6 - all with ft = (0,0,-1/2), the fractional
