@@ -881,7 +881,6 @@ PROGRAM pw2wannier90
     call errore('pw2wannier90','Sigma in the SCDM method must be positive.', 1)
   IF (irr_bz) THEN
      IF (gamma_only) CALL errore('pw2wannier90', "irr_bz and gamma_only are not compatible", 1)
-     IF (write_spn) CALL errore('pw2wannier90', "irr_bz and write_spn not implemented", 1)
      IF (write_unk) CALL errore('pw2wannier90', "irr_bz and write_unk not implemented", 1)
      IF (write_uHu) CALL errore('pw2wannier90', "irr_bz and write_uHu not implemented", 1)
      IF (write_uIu) CALL errore('pw2wannier90', "irr_bz and write_uIu not implemented", 1)
@@ -4258,7 +4257,15 @@ SUBROUTINE compute_spin
         'write_spn not meant to work library mode', 1)
    !endivo
    !
-   CALL utility_open_output_file("spn", spn_formatted, iun_spn)
+   ! Koretsune
+   ! with irr_bz the k-points of this run are the irreducible ones, so what is
+   ! computed here is the spin matrix in the IBZ: write it as seedname.ispn, to be
+   ! expanded to the full BZ by symwannier
+   IF (irr_bz) THEN
+      CALL utility_open_output_file("ispn", spn_formatted, iun_spn)
+   ELSE
+      CALL utility_open_output_file("spn", spn_formatted, iun_spn)
+   ENDIF
    !
    IF (ionode) THEN
       IF (spn_formatted) THEN
@@ -4403,7 +4410,11 @@ SUBROUTINE compute_spin
    ! If using pool parallelization, concatenate files written by other nodes
    ! to the main output.
    !
-   CALL utility_merge_files("spn", spn_formatted, 3*((num_bands*(num_bands+1))/2))
+   IF (irr_bz) THEN
+      CALL utility_merge_files("ispn", spn_formatted, 3*((num_bands*(num_bands+1))/2))
+   ELSE
+      CALL utility_merge_files("spn", spn_formatted, 3*((num_bands*(num_bands+1))/2))
+   ENDIF
    !
    DEALLOCATE(evc_k)
    DEALLOCATE(spn)

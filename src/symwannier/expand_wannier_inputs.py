@@ -14,6 +14,7 @@ from symwannier.amn import Amn
 from symwannier.mmn import Mmn
 from symwannier.eig import Eig
 from symwannier.dmn import Dmn
+from symwannier.spn import Spn
 
 def main(argv=None, for_cli=False):
     """Expand symmetry-reduced Wannier input files to full k-point sets.
@@ -44,6 +45,12 @@ def main(argv=None, for_cli=False):
     )
 
     parser.add_argument(
+        "--spn",
+        action="store_true",
+        help="Also expand prefix.ispn to prefix.spn, the spin matrix elements postw90 uses"
+    )
+
+    parser.add_argument(
         "prefix",
         help="Prefix name of input/output files"
     )
@@ -71,6 +78,12 @@ def main(argv=None, for_cli=False):
 
     # which bands the expansion reproduces, and the outer window that keeps to them
     mmn.check_bands(eig=eig.eig)
+
+    # Spn
+    if args.spn:
+        log.info(f"{prefix}.ispn => {prefix}.spn")
+        spn = Spn(file_spn=prefix+".ispn", nnkp=nnkp, sym=sym, log=log)
+        spn.write_spn(prefix+".spn")
 
     # Dmn
     if args.dmn:
