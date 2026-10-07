@@ -13,6 +13,7 @@ from symwannier.sym import Sym
 from symwannier.amn import Amn
 from symwannier.mmn import Mmn
 from symwannier.eig import Eig
+from symwannier.dmn import Dmn
 
 def main(argv=None, for_cli=False):
     """Expand symmetry-reduced Wannier input files to full k-point sets.
@@ -37,11 +38,18 @@ def main(argv=None, for_cli=False):
     )
 
     parser.add_argument(
+        "--dmn",
+        action="store_true",
+        help="Also write prefix.dmn, the symmetry file wannier90 needs for site_symmetry"
+    )
+
+    parser.add_argument(
         "prefix",
         help="Prefix name of input/output files"
     )
 
-    prefix = parser.parse_args(argv).prefix
+    args = parser.parse_args(argv)
+    prefix = args.prefix
 
     nnkp = Nnkp(file_nnkp=prefix+".nnkp", log=log)
     sym = Sym(file_sym=prefix+".isym", nnkp=nnkp, log=log)
@@ -60,6 +68,13 @@ def main(argv=None, for_cli=False):
     log.info(f"{prefix}.immn => {prefix}.mmn")
     mmn = Mmn(file_mmn=prefix+".immn", nnkp=nnkp, sym=sym, log=log)
     mmn.write_mmn(prefix+".mmn")
+
+    # Dmn
+    if args.dmn:
+        log.info(f"{prefix}.isym => {prefix}.dmn")
+        dmn = Dmn(nnkp=nnkp, sym=sym, amn=amn, log=log)
+        dmn.check(amn.amn)
+        dmn.write_dmn(prefix+".dmn")
 
 if __name__ == '__main__':
     main()
