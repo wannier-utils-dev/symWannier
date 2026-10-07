@@ -40,10 +40,28 @@ Note: Quantum ESPRESSO version 7.3 or later is required for this step.
 pw2wannier90.x < pw2wan.in
 ```
 
-Calculate Mmn, Amn and Eig in the full BZ using ```expand_wannier_inputs.py```.
+Calculate Mmn, Amn and Eig in the full BZ using ```symwannier expand```.
 ```
 symwannier expand prefix
 ```
+
+Two further files can be produced from the same IBZ data, neither of which
+pw2wannier90.x writes together with ```irr_bz```.
+
+```
+symwannier expand --dmn prefix
+```
+also writes prefix.dmn, the symmetry file wannier90 reads with
+```site_symmetry = .true.```. The file cannot represent an antiunitary
+operation, so it is not written for every system; where that happens the command
+says so rather than writing something wrong.
+
+```
+symwannier expand --spn prefix
+```
+also expands prefix.ispn to prefix.spn, the spin matrix elements postw90 uses.
+Run pw2wannier90.x with ```write_spn = .true.``` and ```spn_formatted = .true.```
+to obtain prefix.ispn.
 
 Run wannier90 as usual.
 ```
