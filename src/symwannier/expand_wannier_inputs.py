@@ -69,6 +69,9 @@ def main(argv=None, for_cli=False):
     mmn = Mmn(file_mmn=prefix+".immn", nnkp=nnkp, sym=sym, log=log)
     mmn.write_mmn(prefix+".mmn")
 
+    # which bands the expansion reproduces, and the outer window that keeps to them
+    mmn.check_bands(eig=eig.eig)
+
     # Dmn
     if args.dmn:
         log.info(f"{prefix}.isym => {prefix}.dmn")

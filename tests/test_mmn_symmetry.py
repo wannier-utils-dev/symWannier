@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 
@@ -67,3 +69,74 @@ def test_expanded_mmn_is_a_set_of_overlaps(test_data_dir, material, n_good, tol)
         # graphene (5.5e-07 -> 4.7e-01), Sn (2.9e-07 -> 6.1e-01) and Fe_atom_proj
         # (4.1e-07 -> 2.6e-01), and gradual for Ni_atom_proj (9.1e-07 -> 1.8e-06)
         assert dev[:n_good+1, :n_good+1].max() > tol
+
+
+@pytest.mark.parametrize(
+    "material, n_min, n_affected, e_max",
+    [
+        ("diamond", 4, 0, None),
+        ("Sn", 22, 12, 19.5350),
+        ("Fe_atom_proj", 49, 10, 80.3933),
+    ],
+)
+def test_check_bands(test_data_dir, material, n_min, n_affected, e_max):
+    """Mmn.check_bands reports which bands the expansion reproduces, and up to which energy.
+
+    The number of reproduced bands changes from k-point to k-point - a multiplet cut
+    at one k-point need not be degenerate at another - so num_bands cannot be chosen
+    to avoid it. The energy ceiling can be used instead, as the outer window.
+    """
+    from symwannier.nnkp import Nnkp
+    from symwannier.sym import Sym
+    from symwannier.mmn import Mmn
+    from symwannier.eig import Eig
+
+    nnkp = Nnkp(file_nnkp=str(test_data_dir / f"{material}.nnkp"))
+    sym = Sym(file_sym=str(test_data_dir / f"{material}.isym"), nnkp=nnkp)
+    mmn = Mmn(file_mmn=str(test_data_dir / f"{material}.immn"), nnkp=nnkp, sym=sym)
+    eig = Eig(str(test_data_dir / f"{material}.ieig"), sym=sym)
+
+    n_bands, found = mmn.check_bands(eig=eig.eig)
+
+    assert n_bands.min() == n_min
+    assert np.sum(n_bands < mmn.num_bands) == n_affected
+    if e_max is None:
+        assert found is None
+    else:
+        assert found == pytest.approx(e_max, abs=1e-3)
+
+    # it agrees with the deviation computed independently above
+    dev, num_bands = adjoint_deviation(test_data_dir, material)
+    assert dev[:n_bands.min(), :n_bands.min()].max() < 1e-4
+
+
+def test_wannierize_warns_when_the_window_is_too_high(test_data_dir, tmp_path, copy_inputs, caplog):
+    """Fe_atom_proj asks for dis_win_max = 100, above the 80.4 eV the expansion covers."""
+    from symwannier.wannierize import Wannierize
+
+    copy_inputs("Fe_atom_proj", tmp_path)
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        with caplog.at_level("WARNING"):
+            Wannierize(prefix="Fe_atom_proj", lsym=True, log_level="WARNING")
+    finally:
+        os.chdir(cwd)
+
+    assert "does not reproduce the highest bands" in caplog.text
+    assert "dis_win_max = 100" in caplog.text
+
+
+def test_wannierize_is_quiet_when_every_band_is_covered(test_data_dir, tmp_path, copy_inputs, caplog):
+    from symwannier.wannierize import Wannierize
+
+    copy_inputs("diamond", tmp_path)
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        with caplog.at_level("WARNING"):
+            Wannierize(prefix="diamond", lsym=True, log_level="WARNING")
+    finally:
+        os.chdir(cwd)
+
+    assert "dis_win_max" not in caplog.text

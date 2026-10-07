@@ -106,6 +106,16 @@ class Wannierize:
         self.time.stop_clock("amn read")
         self.eig = Eig(prefix+"." + ext + "eig", sym=self.sym, log=self.log)
         self.log.debug(f"Loaded Amn: shape={self.amn.amn.shape}, Eig: shape={self.eig.eig.shape}")
+
+        if self.sym is not None:
+            # the expansion cannot reproduce a band whose degenerate multiplet is cut
+            # by num_bands; warn when the outer window reaches above those bands
+            _, e_max = mmn.check_bands(eig=self.eig.eig)
+            if e_max is not None and self.win.dis_win_max > e_max:
+                self.log.warning(
+                    "  Warning: dis_win_max = %g of %s.win is above %.4f eV, so the "
+                    "disentanglement may pick up bands the expansion does not reproduce",
+                    self.win.dis_win_max, prefix, e_max)
         # Projectability p_mk = sum_n |<psi_mk|g_n>|^2 for optional disentanglement mode
         self.projectability = np.einsum(
             "knm,knm->kn", self.amn.amn, np.conj(self.amn.amn), optimize=True
