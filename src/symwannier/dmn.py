@@ -20,8 +20,24 @@ class Dmn():
     expand_wannier_inputs.
 
     The dmn file has no place for an antiunitary operation, so only the spatial
-    operations of prefix.isym are used, and every k-point of the full mesh has
-    to be reachable from the irreducible mesh without time reversal.
+    operations of prefix.isym are used.
+
+    Note on the phase convention. The file this writes is not identical to the
+    one pw2wannier90 writes for the same system, although it is equivalent. Both
+    have the form diag(phase) rotmat^dagger with the same rotation matrices
+    (wws = rotmat^T to machine precision) and the same dependence of the phase on
+    the Wannier index, which is the lattice shift Rshift of the projection
+    centers; they differ by one scalar of modulus one per (operation, k-point).
+    That scalar cancels in every use wannier90 makes of the file, because the
+    relation above and everything built on it are invariant under
+    (d, D) -> (lambda d, lambda D), and the final spreads agree to 1e-9. Of the
+    48 operations of diamond, 36 of the scalars are a constant lattice offset,
+    42 are that plus the phase an umklapp picks up from the fractional
+    translation, and the remaining 6 - all with ft = (0,0,-1/2), the fractional
+    translation along the offset of one of the projection centers - are not
+    explained by either. pw2wannier90 routes the lattice vector through the
+    inverse operation (vps2t(:, ips2p(ip, invs(isym)), isym)), which is the most
+    likely home of the residual sign; that bookkeeping is not reproduced here.
     """
 
     def __init__(self, nnkp, sym, amn, log=None):
@@ -65,25 +81,29 @@ class Dmn():
         isym_list.remove(identity[0])
         return [identity[0]] + isym_list
 
-    def _representatives(self):
-        """For each k of the full mesh, a spatial operation mapping its irreducible k to it."""
+    def _orbits(self):
+        """Split the full mesh into orbits of the spatial operations.
+
+        The irreducible k-points of prefix.isym are used as seeds, so when the
+        spatial operations already cover the mesh the orbits are exactly their
+        stars and the irreducible set of the dmn is the one of prefix.isym. When
+        time reversal is needed as well - prefix.isym reduces the mesh further
+        than the spatial operations can - the stars break into several orbits and
+        the dmn gets more irreducible k-points than prefix.isym has.
+        """
         sym = self.sym
-        rep = - np.ones([self.nk], dtype=int)
-        for ik, k in enumerate(sym.full_kpoints):
-            ks = sym.irr_kpoints[ sym.equiv[ik] ]
+        ik2ir = - np.ones([self.nk], dtype=int)
+        ir2ik = []
+        for ik in list(sym.iks2ik) + list(range(self.nk)):
+            if ik2ir[ik] >= 0:
+                continue
+            ir = len(ir2ik)
+            ir2ik.append(ik)
             for isym in self.isym_list:
-                kdiff = np.dot(sym.s[isym], ks) - k
-                if np.allclose(kdiff, np.round(kdiff)):
-                    rep[ik] = isym
-                    break
-        missing = np.flatnonzero(rep < 0)
-        if len(missing) > 0:
-            raise ValueError(
-                "k-point {} of the full mesh is only reachable from the irreducible mesh "
-                "with time reversal; the dmn file cannot represent an antiunitary "
-                "operation".format(missing[0]+1)
-            )
-        return rep
+                ik2 = sym.search_ik_full(np.dot(sym.s[isym], sym.full_kpoints[ik]))
+                if ik2ir[ik2] < 0:
+                    ik2ir[ik2] = ir
+        return ik2ir, np.array(ir2ik, dtype=int)
 
     def _build(self):
         """Build kptsym and the d matrices for every irreducible k and operation."""
@@ -92,45 +112,61 @@ class Dmn():
 
         self.isym_list = self._spatial_symops()
         self.nsym = len(self.isym_list)
-        self.log.info("dmn: {} spatial symmetry operations out of {}".format(self.nsym, sym.nsym))
-
-        rep = self._representatives()
-
-        # wannier90 numbers the k-points of the full mesh; its irreducible set is
-        # the one of prefix.isym
-        self.ik2ir = sym.equiv
-        self.ir2ik = sym.iks2ik
+        self.ik2ir, self.ir2ik = self._orbits()
+        self.nkirr = len(self.ir2ik)
+        self.log.info("dmn: {} spatial symmetry operations out of {}, {} irreducible k-points"
+                      .format(self.nsym, sym.nsym, self.nkirr))
 
         self.kptsym = np.zeros([self.nsym, self.nkirr], dtype=int)
         self.d_matrix_wann = np.zeros([self.nsym, self.nkirr, self.num_wann, self.num_wann], dtype=complex)
         self.d_matrix_band = np.zeros([self.nsym, self.nkirr, self.num_bands, self.num_bands], dtype=complex)
 
-        for iks in range(self.nkirr):
-            k = sym.irr_kpoints[iks]
-            ik1 = self.ir2ik[iks]
-            for i, isym in enumerate(self.isym_list):
-                ik2 = sym.search_ik_full(np.dot(sym.s[isym], k))
-                self.kptsym[i, iks] = ik2
+        for ir in range(self.nkirr):
+            # the k-point of the dmn, the irreducible k-point of prefix.isym it comes
+            # from, and the operation symmetrize_expand used to get there
+            ik1 = self.ir2ik[ir]
+            iks = sym.equiv[ik1]
+            ks = sym.irr_kpoints[iks]
+            rep1 = sym.equiv_sym[ik1]
+            m1 = self._rot(Rmat, Rshift, rep1, ks)
 
-                # R = rep(Rk) h, with h an operation of the little group of k.
-                # The sign search_symop returns for the spinor double group is not
-                # used: both matrices below are expressed through the same h, so it
-                # appears on either side of the relation and cancels.
-                isym_h, _, _ = sym.search_symop(
-                    [[rep[ik2], -1], [isym, 1], [rep[ik1], 1]] )
+            for i, isym in enumerate(self.isym_list):
+                ik2 = sym.search_ik_full(np.dot(sym.s[isym], sym.full_kpoints[ik1]))
+                self.kptsym[i, ir] = ik2
+                rep2 = sym.equiv_sym[ik2]
+
+                # R rep1 = rep2 h, with h an operation of the little group of the
+                # irreducible k-point. The sign search_symop returns for the spinor
+                # double group is not used: both matrices below are expressed through
+                # the same h, so it appears on either side of the relation and cancels.
+                isym_h, _, _ = sym.search_symop([[rep2, -1], [isym, 1], [rep1, 1]])
+                if sym.t_rev[isym_h] != 0:
+                    raise ValueError(
+                        "k-points {} and {} of the full mesh are related by a spatial "
+                        "operation but reached from the irreducible mesh with and without "
+                        "time reversal; the dmn file cannot represent an antiunitary "
+                        "operation".format(ik1+1, ik2+1))
 
                 # band side: d(R,k) = repmat[k, h]
-                self.d_matrix_band[i, iks, :, :] = sym.repmat[iks, isym_h, :, :]
+                d = sym.repmat[iks, isym_h, :, :]
 
-                # Wannier side: the rotation and the phase that symmetrize_expand
-                # applies, built from the same decomposition. Taking the rotation of R
-                # directly would be wrong whenever R k leaves the first Brillouin zone:
-                # the rotation matrices pick up a phase from the fractional translation
-                # when the umklapp vector is not zero, and that phase only comes out
-                # right if the two factors are kept apart.
-                mat = np.einsum("lm,mn->ln", self._rot(Rmat, Rshift, isym_h, k),
-                                self._rot(Rmat, Rshift, rep[ik2], k), optimize=True)
-                self.d_matrix_wann[i, iks, :, :] = np.conj(mat).T
+                # Wannier side: the rotations and phases that symmetrize_expand applies,
+                # built from the same decomposition. Taking the rotation of R directly
+                # would be wrong whenever R k leaves the first Brillouin zone: the
+                # rotation matrices pick up a phase from the fractional translation when
+                # the umklapp vector is not zero, and that phase only comes out right if
+                # the factors are kept apart.
+                mat = np.conj(m1).T @ self._rot(Rmat, Rshift, isym_h, ks) \
+                                   @ self._rot(Rmat, Rshift, rep2, ks)
+
+                # where symmetrize_expand conjugated Amn, it did so at both k-points,
+                # so the relation stays linear and only the matrices are conjugated
+                if sym.t_rev[rep1] == 1:
+                    d = np.conj(d)
+                    mat = np.conj(mat)
+
+                self.d_matrix_band[i, ir, :, :] = d
+                self.d_matrix_wann[i, ir, :, :] = np.conj(mat).T
 
     @staticmethod
     def _rot(Rmat, Rshift, isym, k):
@@ -142,7 +178,7 @@ class Dmn():
         phase = np.exp(-1j * 2*np.pi * phase2)
         return np.einsum("ln,n->ln", Rmat[isym,:,:], phase, optimize=True)
 
-    def check(self, amn_full, thr=1e-6):
+    def check(self, amn_full, thr=1e-4):
         """Check the dmn against Amn in the full BZ.
 
         Verifies the relation wannier90 relies on,
@@ -151,6 +187,13 @@ class Dmn():
 
         for every irreducible k and every symmetry operation. Returns the largest
         deviation found.
+
+        The relation can only hold as well as the Amn written by pw2wannier90 is
+        itself symmetric under the little group, which sets the deviation of a sound
+        calculation: 5e-14 (H), 1e-08 (diamond), 2e-07 (Sn), 1e-06 (GaAs, whose Amn
+        is only symmetric to 6e-07 itself). The default threshold sits above those
+        and well below the 1e-02 of a case where a degenerate multiplet is cut by
+        num_bands, which makes repmat non-unitary and genuinely breaks the relation.
         """
         diff = 0.0
         for iks in range(self.nkirr):

@@ -31,7 +31,10 @@ def test_dmn_reproduces_amn(test_data_dir, material, nsym, nkirr):
 
     assert dmn.nsym == nsym                     # only the spatial operations
     assert dmn.nsym * 2 == sym.nsym             # prefix.isym also holds their time-reversed copies
-    assert dmn.nkirr == nkirr
+    # the spatial operations alone already cover the mesh, so the irreducible set
+    # is the one of prefix.isym
+    assert dmn.nkirr == nkirr == sym.nks
+    assert np.array_equal(dmn.ir2ik, sym.iks2ik)
     assert dmn.nk == sym.nkf
     assert dmn.check(amn.amn) < 1e-6
 
@@ -43,14 +46,14 @@ def test_dmn_structure(test_data_dir):
     assert dmn.isym_list[0] == 0 or np.array_equal(sym.s[dmn.isym_list[0]], np.eye(3, dtype=int))
     assert np.all(sym.t_rev[dmn.isym_list] == 0)
 
-    for iks in range(dmn.nkirr):
-        assert dmn.ik2ir[dmn.ir2ik[iks]] == iks
-        k = sym.irr_kpoints[iks]
+    for ir in range(dmn.nkirr):
+        assert dmn.ik2ir[dmn.ir2ik[ir]] == ir
+        k = sym.full_kpoints[dmn.ir2ik[ir]]
         for i, isym in enumerate(dmn.isym_list):
-            kdiff = np.dot(sym.s[isym], k) - sym.full_kpoints[dmn.kptsym[i, iks]]
+            kdiff = np.dot(sym.s[isym], k) - sym.full_kpoints[dmn.kptsym[i, ir]]
             assert np.allclose(kdiff, np.round(kdiff))
         # the identity leaves the irreducible k-point where it is
-        assert dmn.kptsym[0, iks] == dmn.ir2ik[iks]
+        assert dmn.kptsym[0, ir] == dmn.ir2ik[ir]
 
     # the d matrices are unitary wherever the representation matrices are
     for i in range(dmn.nsym):
@@ -91,8 +94,34 @@ def test_dmn_file_round_trip(test_data_dir, tmp_path):
     assert np.allclose(db, dmn.d_matrix_band, atol=1e-9)
 
 
-def test_dmn_rejects_time_reversal(test_data_dir):
-    """Fe_atom_proj needs time reversal to cover the mesh, which the dmn cannot express."""
+def test_dmn_with_time_reversal(test_data_dir):
+    """GaAs has no inversion, so prefix.isym reduces the mesh with time reversal too.
+
+    The spatial operations alone cannot reach every k of the mesh from the
+    irreducible set of prefix.isym, so the stars break into more orbits and the dmn
+    ends up with more irreducible k-points. Where symmetrize_expand conjugated Amn
+    it did so at both ends of a spatial operation, and the relation stays linear.
+    """
+    dmn, sym, amn = build(test_data_dir, "GaAs")
+
+    assert dmn.nsym == 24 and dmn.nsym * 2 == sym.nsym
+    assert dmn.nkirr == 10 > sym.nks == 8        # the stars split
+    assert np.any(sym.t_rev[sym.equiv_sym] == 1)  # time reversal is really used
+    assert dmn.check(amn.amn) < 1e-5
+
+    # every k of the mesh belongs to exactly one orbit, and the orbits are the ones
+    # the kptsym table describes
+    assert np.all(dmn.ik2ir >= 0)
+    for ir in range(dmn.nkirr):
+        assert set(dmn.ik2ir[dmn.kptsym[:, ir]]) == {ir}
+
+
+def test_dmn_rejects_mixed_time_reversal(test_data_dir):
+    """Fe_atom_proj reaches k-points of one spatial orbit with and without time reversal.
+
+    The relation wannier90 needs is then antilinear at one end and linear at the
+    other, which no pair of matrices can express.
+    """
     with pytest.raises(ValueError, match="time reversal"):
         build(test_data_dir, "Fe_atom_proj")
 
