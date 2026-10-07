@@ -161,7 +161,15 @@ class Sym:
                 raise Exception("k corresponds to two different irr. kpoints")
             if len(iks_list) == 1:
                 equiv[ik] = iks_list[0]
-                equiv_sym[ik] = np.argmax(match[iks_list[0]])   # first matching isym
+                # The operation with the lowest index, which is not a free choice:
+                # pw2wannier90 picks the neighbour k+b of the irreducible mesh the same
+                # way (kpb_search loops isym from 1 and returns at the first match) and
+                # writes prefix.immn with the states it produces. Mmn expands those
+                # blocks assuming the same operation, so any other rule here - preferring
+                # the spatial operations, say - desynchronises the expansion from the
+                # file and the result is wrong from the first band onwards. Amn does not
+                # involve neighbour points and is insensitive to it.
+                equiv_sym[ik] = np.argmax(match[iks_list[0]])
         if np.any(equiv < 0):
             raise Exception("some k points do not correspond to irr. kpoints")
         if np.any(iks2ik < 0):
