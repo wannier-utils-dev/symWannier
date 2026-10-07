@@ -99,7 +99,9 @@ class Mmn:
 
         e_max = None
         if eig is not None:
-            e_max = min( eig[ik, n_bands[ik]-1] for ik in affected if n_bands[ik] > 0 )
+            covered = [ eig[ik, n_bands[ik]-1] for ik in affected if n_bands[ik] > 0 ]
+            # no energy is safe when some k-point has no reproduced band at all
+            e_max = min(covered) if len(covered) == len(affected) else None
         self.log.warning(
             "  Warning: the symmetry expansion does not reproduce the highest bands at "
             "%d of %d k-points (as few as %d of %d bands); a degenerate multiplet is cut "

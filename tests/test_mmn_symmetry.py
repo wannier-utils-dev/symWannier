@@ -140,3 +140,39 @@ def test_wannierize_is_quiet_when_every_band_is_covered(test_data_dir, tmp_path,
         os.chdir(cwd)
 
     assert "dis_win_max" not in caplog.text
+
+
+def test_check_bands_when_nothing_is_reproduced(test_data_dir):
+    """No energy ceiling can be given when some k-point has no reproduced band.
+
+    Reached here by choosing the representative of every k-point among the spatial
+    operations instead of taking the first matching one. For Fe_atom_proj that is a
+    different choice at 9 of its 14 spatial orbits, and the expansion then fails the
+    overlap identity from the first band onwards - the two choices define the states
+    at those k-points through an antiunitary and a unitary operation respectively,
+    which is not a gauge change.
+    """
+    from symwannier.nnkp import Nnkp
+    from symwannier.sym import Sym
+    from symwannier.mmn import Mmn
+    from symwannier.eig import Eig
+
+    nnkp = Nnkp(file_nnkp=str(test_data_dir / "Fe_atom_proj.nnkp"))
+    sym = Sym(file_sym=str(test_data_dir / "Fe_atom_proj.isym"), nnkp=nnkp)
+    for ik, k in enumerate(sym.full_kpoints):
+        ks = sym.irr_kpoints[sym.equiv[ik]]
+        for isym in range(sym.nsym):
+            if sym.t_rev[isym]:
+                continue
+            kdiff = np.dot(sym.s[isym], ks) - k
+            if np.allclose(kdiff, np.round(kdiff)):
+                sym.equiv_sym[ik] = isym
+                break
+
+    mmn = Mmn(file_mmn=str(test_data_dir / "Fe_atom_proj.immn"), nnkp=nnkp, sym=sym)
+    eig = Eig(str(test_data_dir / "Fe_atom_proj.ieig"), sym=sym)
+
+    n_bands, e_max = mmn.check_bands(eig=eig.eig)
+
+    assert np.all(n_bands == 0)
+    assert e_max is None          # and it does not raise while looking for one
