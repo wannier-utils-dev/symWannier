@@ -269,12 +269,24 @@ class Amn():
             #assert np.allclose( np.einsum("ab,cb->ac", Rmat[isym], Rmat[isym]), np.eye(Rmat.shape[1]) )  # Rmat is orthogonal
             for iw in range(self.num_wann):
                 rpos = pos[ np.logical_not(Rmat[isym,:,iw] == 0) ]
+                if len(rpos) == 0:
+                    # pw2wannier90 omits a rotation matrix whose entries are all below
+                    # 1e-10, which leaves the block zero and the image undefined
+                    raise ValueError(
+                        "symmetry operation {} does not rotate projection {} into any "
+                        "other; prefix.isym has no rotation matrix for it"
+                        .format(isym+1, iw+1))
                 r0 = rpos[0]
-                for r1 in rpos:
-                    assert np.all(r0 == r1)
+                if not np.allclose(rpos, r0, atol=1e-3):
+                    raise ValueError(
+                        "symmetry operation {} rotates projection {} into projections "
+                        "sitting on different centers".format(isym+1, iw+1))
                 Rshift[isym, iw, :] = self.sym.apply_r(isym, pos[iw]) - r0
 
-        assert np.all(np.abs(Rshift - np.round(Rshift)) < 1e-3), "Rshift is not a lattice vector"
+        if not np.all(np.abs(Rshift - np.round(Rshift)) < 1e-3):
+            raise ValueError("Rshift is not a lattice vector; the projection centers of "
+                             "prefix.isym or prefix.nnkp are not consistent with the "
+                             "symmetry operations")
 
         return Rmat, Rshift, pos
 
