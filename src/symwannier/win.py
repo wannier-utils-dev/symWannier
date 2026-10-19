@@ -59,7 +59,7 @@ class Win:
         if guiding is None:
             self.guiding_centres = None
         else:
-            self.guiding_centres = guiding.strip().lower().strip(".") in ("true", "t")
+            self.guiding_centres = self._as_logical("guiding_centres", guiding)
 
         p = self._get_param_keyword("mp_grid", dtype = str)
         if p is not None:
@@ -67,9 +67,28 @@ class Win:
         else:
             raise Exception('mp_grid is not defined')
 
+    @staticmethod
+    def _as_logical(keyword, value):
+        """A Fortran logical in any of the spellings wannier90 accepts.
+
+        An unrecognized value raises rather than falling back to False: which way a
+        logical lands can change the result, so a typo has to be visible.
+        """
+        v = value.strip().lower().strip(".")
+        if v in ("true", "t"):
+            return True
+        if v in ("false", "f"):
+            return False
+        raise ValueError("{} = {} is not a logical value".format(keyword, value.strip()))
+
     def _get_param_keyword(self, keyword, default_value = None, dtype = int):
         data = None
         for line in self.lines:
+            # wannier90 takes ! and # as comments wherever they appear in the line,
+            # and lets a keyword be indented. Neither is handled by reading the raw
+            # line: a trailing comment would be parsed as part of the value, silently
+            # for a string keyword, and an indented keyword would be missed entirely.
+            line = line.split("!")[0].split("#")[0].strip()
             if line.startswith(keyword):
                 assert data is None, keyword + " is defined more than once"
                 if len(line.split("=")) > 1:

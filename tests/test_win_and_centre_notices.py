@@ -17,13 +17,52 @@ from symwannier.wannierize import Wannierize
         ("guiding_centres = .true.", True),
         ("guiding_centres = true", True),
         ("guiding_centres = .TRUE.", True),
+        ("guiding_centres = T", True),
         ("guiding_centres = .false.", False),
+        ("guiding_centres = .f.", False),
+        # wannier90 takes ! and # as comments anywhere in the line, and lets the
+        # keyword be indented. Reading the raw line made the first spelling below
+        # come out False, the opposite of what it says
+        ("guiding_centres = .true. ! on", True),
+        ("guiding_centres = .true.  # on", True),
+        ("guiding_centres = .false. ! off", False),
+        ("    guiding_centres = .false.", False),
+        ("\tguiding_centres = .true.", True),
     ],
 )
 def test_win_reads_guiding_centres(tmp_path, line, expected):
     (tmp_path / "a.win").write_text(
         "num_wann = 4\nnum_bands = 4\nmp_grid : 2 2 2\n" + line + "\n")
     assert Win(str(tmp_path / "a")).guiding_centres is expected
+
+
+def test_win_rejects_a_value_that_is_not_a_logical(tmp_path):
+    """A typo must not quietly become False, which is the branch the default avoids."""
+    (tmp_path / "a.win").write_text(
+        "num_wann = 4\nnum_bands = 4\nmp_grid : 2 2 2\nguiding_centres = treu\n")
+    with pytest.raises(ValueError, match="guiding_centres = treu is not a logical"):
+        Win(str(tmp_path / "a"))
+
+
+@pytest.mark.parametrize(
+    "line, attr, expected",
+    [
+        ("mp_grid : 2 2 2 ! the mesh", "mp_grid", [2, 2, 2]),
+        ("num_iter = 50 ! iterations", "num_iter", 50),
+        ("  dis_froz_max = 7.5  # the window", "dis_froz_max", 7.5),
+    ],
+)
+def test_win_keywords_survive_a_comment(tmp_path, line, attr, expected):
+    """The same defect reached every keyword, loudly for the numeric ones.
+
+    int(" 50 ! iterations") raises, so a win file with a commented num_iter could
+    not be read at all.
+    """
+    body = "num_wann = 4\nnum_bands = 8\nmp_grid : 2 2 2\n"
+    if attr == "mp_grid":
+        body = "num_wann = 4\nnum_bands = 8\n"
+    (tmp_path / "a.win").write_text(body + line + "\n")
+    assert np.all(getattr(Win(str(tmp_path / "a")), attr) == expected)
 
 
 @pytest.mark.parametrize(
