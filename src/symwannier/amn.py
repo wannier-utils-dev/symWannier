@@ -33,6 +33,7 @@ class Amn():
         self.nnkp = nnkp
         self.sym = sym
         self.projection_centers = None  # Will be initialized after reading amn
+        self._reported_lattice_shifts = False
 
         fp, used_path = open_text_or_gz(file_amn, desc="amn file")
         self.log.debug(f"Reading amn from {used_path}")
@@ -288,5 +289,35 @@ class Amn():
                              "prefix.isym or prefix.nnkp are not consistent with the "
                              "symmetry operations")
 
+        self._report_lattice_shifts(Rshift, pos)
         return Rmat, Rshift, pos
+
+    def _report_lattice_shifts(self, Rshift, pos):
+        """Report how often a symmetry operation moves a projection by a lattice vector.
+
+        The expansion multiplies Amn by exp(-2 pi i k Rshift), so where Rshift vanishes
+        the phase is one everywhere and the symmetry acts on the projections by rotation
+        alone. That is the case when every projection center is a point the operations
+        leave where it is, which is worth aiming for: a center sitting elsewhere brings
+        the phase in even when the group is symmorphic and all the projections share one
+        center - GaAs has its single center at (1/4,1/4,1/4) and 36 of its 48 operations
+        move it by a lattice vector. A nonsymmorphic group, or projections spread over
+        several sites, cannot avoid it.
+        """
+        if self._reported_lattice_shifts:
+            return
+        self._reported_lattice_shifts = True
+
+        nonzero = np.any(np.abs(Rshift) > 1e-6, axis=2)      # [nsym, num_wann]
+        if not np.any(nonzero):
+            self.log.info("projection centers: the symmetry acts on them by rotation alone")
+            return
+        nsym_moved = int(np.sum(np.any(nonzero, axis=1)))
+        centers = np.unique(np.round(pos, 6), axis=0)
+        self.log.info(
+            "projection centers: %d of %d symmetry operations move a projection by a "
+            "lattice vector (%d distinct center%s); the expansion carries a phase for "
+            "those. Putting the origin on the site the projections sit at removes it "
+            "where the space group allows",
+            nsym_moved, Rshift.shape[0], len(centers), "" if len(centers) == 1 else "s")
 

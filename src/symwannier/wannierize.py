@@ -86,6 +86,14 @@ class Wannierize:
             self.sym = None
             ext = ''
 
+        if getattr(self.win, "guiding_centres", False):
+            self.log.warning(
+                "  Warning: guiding_centres = .true. in %s.win is a wannier90 option and "
+                "has no effect here. wannier90 uses it to re-choose the branch of "
+                "Im ln M_nn during the minimization; this code always takes the principal "
+                "branch, so the two minimize different things and may end on different "
+                "minima or place the centres in different cells", prefix)
+
         self.time.start_clock("mmn read")
         mmn = Mmn(file_mmn = prefix+"." + ext + "mmn", nnkp=self.nnkp, sym=self.sym, log=self.log)
         self.time.stop_clock("mmn read")

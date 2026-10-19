@@ -52,6 +52,11 @@ class Win:
             self.dis_proj_max = dis_proj_max
         self.dis_mix_ratio = self._get_param_keyword("dis_mix_ratio", 0.5, dtype=float)
 
+        # wannier90 only: re-chooses the branch of Im ln M_nn during the minimization
+        guiding = self._get_param_keyword("guiding_centres", None, dtype=str)
+        self.guiding_centres = (guiding is not None
+                                and guiding.strip().lower().strip(".") in ("true", "t"))
+
         p = self._get_param_keyword("mp_grid", dtype = str)
         if p is not None:
             self.mp_grid = np.array([ int(x) for x in p.split() ])
