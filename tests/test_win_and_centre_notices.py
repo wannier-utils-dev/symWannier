@@ -115,3 +115,58 @@ def test_lattice_shift_report(test_data_dir, material, n_moved, n_centres, caplo
         assert "rotation alone" in caplog.text
     else:
         assert f"{n_moved} of {sym.nsym} symmetry operations move" in caplog.text
+
+
+def _run_sb(copy_inputs, tmp_path, name, line=None):
+    """Wannierize the bundled Sb inputs, optionally with a line added to the win."""
+    work = tmp_path / name
+    work.mkdir()
+    copy_inputs("Sb", work)
+    if line:
+        win = work / "Sb.win"
+        win.write_text(win.read_text() + "\n" + line + "\n")
+
+    cwd = os.getcwd()
+    try:
+        os.chdir(work)
+        wann = Wannierize(prefix="Sb", lsym=True, log_level="ERROR")
+        wann.run()
+    finally:
+        os.chdir(cwd)
+    return wann
+
+
+def test_sb_projections_far_from_the_origin(tmp_path, copy_inputs):
+    """Sb at 4x4x4, the case the guided branch exists for.
+
+    Its win file, as cif2qewan writes it, puts the first atom at (0.767,0.767,0.767).
+    That is a correct crystallographic coordinate, but it is most of a lattice vector
+    from the origin, and on this mesh the phase b.r reaches 0.87 pi. The principal
+    branch wraps there, and the four Wannier functions on that site land in the wrong
+    cell: 40.6 A^2 each, 169.279 A^2 in total, which is what wannier90 gives for the
+    same input without guiding_centres. With the guide the same files give 13.437 A^2,
+    the value the equivalent image (-0.233,-0.233,-0.233) produces.
+
+    Only the original structure is bundled. The periodic image is the other cure and
+    agrees with the guide digit for digit, but it is a different input file rather
+    than a different code path, so it would not test anything this does not.
+    """
+    guided = _run_sb(copy_inputs, tmp_path, "guided")
+    principal = _run_sb(copy_inputs, tmp_path, "principal", "guiding_centres = .false.")
+
+    assert np.isclose(np.sum(guided.spreads), 13.43711993, rtol=1e-6)
+    assert np.isclose(np.sum(principal.spreads), 169.27892197, rtol=1e-6)
+
+    # the eight functions are four on each of the two sites, so with the branch taken
+    # consistently the spreads come in pairs
+    order = np.sort(guided.spreads)
+    assert np.allclose(order[0::2], order[1::2], atol=1e-6)
+    assert np.max(guided.spreads) < 2.0
+
+    # and every center sits on an Sb site. Without the guide the four on the far site
+    # are a lattice vector away from either of them
+    a = guided.nnkp.a
+    sites = np.array([[0.767]*3, [0.233]*3]) @ a
+    to_site = lambda r: np.min(np.linalg.norm(r[:,None,:] - sites[None,:,:], axis=2), axis=1)
+    assert np.max(to_site(guided.r)) < 1.0
+    assert np.sum(to_site(principal.r) > 4.0) == 4
