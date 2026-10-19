@@ -84,6 +84,12 @@ To construct symmetry-adapted Wannier functions, use the "-S" option instead of 
 symwannier wannierize -S prefix
 ```
 
+The Wannier center involves ```Im ln M_nn```, which is multivalued. The branch is
+taken closest to the projection centers, so that a projection written at a periodic
+image far from the origin still localizes. wannier90 calls the same idea
+```guiding_centres``` and has it off by default; here it is on unless the win file
+says ```guiding_centres = .false.```, which restores the principal branch.
+
 
 ## Bundled pw2wannier90 interfaces
 

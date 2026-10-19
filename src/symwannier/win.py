@@ -52,15 +52,43 @@ class Win:
             self.dis_proj_max = dis_proj_max
         self.dis_mix_ratio = self._get_param_keyword("dis_mix_ratio", 0.5, dtype=float)
 
+        # True, False, or None when the win file does not mention it. The three are
+        # distinguished because the default here is not wannier90's: see
+        # Wannierize.guide_centres.
+        guiding = self._get_param_keyword("guiding_centres", None, dtype=str)
+        if guiding is None:
+            self.guiding_centres = None
+        else:
+            self.guiding_centres = self._as_logical("guiding_centres", guiding)
+
         p = self._get_param_keyword("mp_grid", dtype = str)
         if p is not None:
             self.mp_grid = np.array([ int(x) for x in p.split() ])
         else:
             raise Exception('mp_grid is not defined')
 
+    @staticmethod
+    def _as_logical(keyword, value):
+        """A Fortran logical in any of the spellings wannier90 accepts.
+
+        An unrecognized value raises rather than falling back to False: which way a
+        logical lands can change the result, so a typo has to be visible.
+        """
+        v = value.strip().lower().strip(".")
+        if v in ("true", "t"):
+            return True
+        if v in ("false", "f"):
+            return False
+        raise ValueError("{} = {} is not a logical value".format(keyword, value.strip()))
+
     def _get_param_keyword(self, keyword, default_value = None, dtype = int):
         data = None
         for line in self.lines:
+            # wannier90 takes ! and # as comments wherever they appear in the line,
+            # and lets a keyword be indented. Neither is handled by reading the raw
+            # line: a trailing comment would be parsed as part of the value, silently
+            # for a string keyword, and an indented keyword would be missed entirely.
+            line = line.split("!")[0].split("#")[0].strip()
             if line.startswith(keyword):
                 assert data is None, keyword + " is defined more than once"
                 if len(line.split("=")) > 1:
