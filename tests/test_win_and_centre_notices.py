@@ -13,7 +13,7 @@ from symwannier.wannierize import Wannierize
 @pytest.mark.parametrize(
     "line, expected",
     [
-        ("", False),
+        ("", None),                                  # absent, and the default is not False
         ("guiding_centres = .true.", True),
         ("guiding_centres = true", True),
         ("guiding_centres = .TRUE.", True),
@@ -26,26 +26,64 @@ def test_win_reads_guiding_centres(tmp_path, line, expected):
     assert Win(str(tmp_path / "a")).guiding_centres is expected
 
 
-def test_wannierize_warns_about_guiding_centres(test_data_dir, tmp_path, copy_inputs, caplog):
-    """wannier90 uses it to re-choose the branch of Im ln M_nn; this code does not.
+@pytest.mark.parametrize(
+    "line, guided",
+    [
+        ("", True),                                  # on unless the win says otherwise
+        ("guiding_centres = .true.", True),
+        ("guiding_centres = .false.", False),
+    ],
+)
+def test_guide_centres_follow_the_win(test_data_dir, tmp_path, copy_inputs, line, guided):
+    """Only guiding_centres = .false. puts the principal branch back.
 
-    Silently ignoring it would make the two minimize different things while looking
-    comparable.
+    The default differs from wannier90's, whose own default is .false.
     """
     copy_inputs("diamond", tmp_path)
     win = tmp_path / "diamond.win"
-    win.write_text(win.read_text() + "\nguiding_centres = .true.\n")
+    if line:
+        win.write_text(win.read_text() + "\n" + line + "\n")
 
     cwd = os.getcwd()
     try:
         os.chdir(tmp_path)
-        with caplog.at_level("WARNING"):
-            Wannierize(prefix="diamond", lsym=True, log_level="WARNING")
+        wann = Wannierize(prefix="diamond", lsym=True, log_level="ERROR")
     finally:
         os.chdir(cwd)
 
-    assert "guiding_centres" in caplog.text
-    assert "no effect here" in caplog.text
+    assert (wann.guide_centres is not None) is guided
+    if guided:
+        # the guide is the projection centers, in cartesian coordinates
+        assert np.allclose(wann.guide_centres,
+                           np.array(wann.amn.projection_centers) @ wann.nnkp.a)
+
+
+def test_imln_takes_the_branch_near_the_guide(test_data_dir, tmp_path, copy_inputs):
+    """Im ln is multivalued, and the principal branch is only safe within pi of zero.
+
+    Built here from a phase that the principal branch would wrap but which is within
+    pi of the guide, which is the situation a projection written at a periodic image
+    far from the origin produces.
+    """
+    copy_inputs("diamond", tmp_path)
+    cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        wann = Wannierize(prefix="diamond", lsym=True, log_level="ERROR")
+    finally:
+        os.chdir(cwd)
+
+    # diamond's own centers are well inside the safe window, so the guide is pushed
+    # out to where a periodic image far from the origin would put it
+    wann.guide_centres = wann.guide_centres + 4.0 * wann.nnkp.a[0]
+    phase = -np.einsum("ba,na->bn", wann.bvec, wann.guide_centres)
+    assert np.max(np.abs(phase)) > np.pi          # the principal branch would wrap
+    mnn = np.exp(1j * phase)[np.newaxis, :, :] * np.ones([wann.nk, 1, 1])
+
+    assert np.allclose(wann._imln_mnn(mnn), phase[np.newaxis, :, :], atol=1e-10)
+    wann.guide_centres = None
+    assert not np.allclose(wann._imln_mnn(mnn), phase[np.newaxis, :, :], atol=1e-10)
+    assert np.allclose(wann._imln_mnn(mnn), np.log(mnn).imag)
 
 
 @pytest.mark.parametrize(

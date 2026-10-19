@@ -52,10 +52,14 @@ class Win:
             self.dis_proj_max = dis_proj_max
         self.dis_mix_ratio = self._get_param_keyword("dis_mix_ratio", 0.5, dtype=float)
 
-        # wannier90 only: re-chooses the branch of Im ln M_nn during the minimization
+        # True, False, or None when the win file does not mention it. The three are
+        # distinguished because the default here is not wannier90's: see
+        # Wannierize.guide_centres.
         guiding = self._get_param_keyword("guiding_centres", None, dtype=str)
-        self.guiding_centres = (guiding is not None
-                                and guiding.strip().lower().strip(".") in ("true", "t"))
+        if guiding is None:
+            self.guiding_centres = None
+        else:
+            self.guiding_centres = guiding.strip().lower().strip(".") in ("true", "t")
 
         p = self._get_param_keyword("mp_grid", dtype = str)
         if p is not None:

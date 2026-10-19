@@ -86,14 +86,6 @@ class Wannierize:
             self.sym = None
             ext = ''
 
-        if getattr(self.win, "guiding_centres", False):
-            self.log.warning(
-                "  Warning: guiding_centres = .true. in %s.win is a wannier90 option and "
-                "has no effect here. wannier90 uses it to re-choose the branch of "
-                "Im ln M_nn during the minimization; this code always takes the principal "
-                "branch, so the two minimize different things and may end on different "
-                "minima or place the centres in different cells", prefix)
-
         self.time.start_clock("mmn read")
         mmn = Mmn(file_mmn = prefix+"." + ext + "mmn", nnkp=self.nnkp, sym=self.sym, log=self.log)
         self.time.stop_clock("mmn read")
@@ -124,6 +116,8 @@ class Wannierize:
                     "  Warning: dis_win_max = %g of %s.win is above %.4f eV, so the "
                     "disentanglement may pick up bands the expansion does not reproduce",
                     self.win.dis_win_max, prefix, e_max)
+        self._setup_guide_centres()
+
         # Projectability p_mk = sum_n |<psi_mk|g_n>|^2 for optional disentanglement mode
         self.projectability = np.einsum(
             "knm,knm->kn", self.amn.amn, np.conj(self.amn.amn), optimize=True
@@ -305,6 +299,44 @@ class Wannierize:
                 self.mmn1 = self.mmn0
                 self.mmn = self.mmn1
 
+    def _setup_guide_centres(self):
+        """Pick the centres the branch of Im ln M_nn is taken closest to.
+
+        The Wannier center is -1/N sum_kb w_b b Im ln M_nn, and Im ln is multivalued.
+        Taking the principal branch is only safe while |b.r| stays below pi, i.e. while
+        the center is within about half the supercell of the origin; past that the
+        branch wraps, the centers land in the wrong cell and the minimization fails.
+        wannier90 avoids it with guiding_centres, which fits guide centers to the data
+        every num_guide_cycles iterations. Here the projection centers are already
+        known - the symmetry expansion needs them - so they serve as the guide
+        directly, and the safe window moves from the origin to them.
+
+        This is on unless the win file says guiding_centres = .false., which restores
+        the principal branch. That default is deliberately not wannier90's, whose own
+        default is .false.: with the guide the results of the bundled systems move by
+        at most 2e-14, while without it a projection written at a periodic image far
+        from the origin silently fails to localize.
+        """
+        self.guide_centres = None
+        if getattr(self.win, "guiding_centres", None) is False:
+            self.log.info("guiding_centres = .false.: taking the principal branch of Im ln M_nn")
+            return
+        centers = getattr(self.amn, "projection_centers", None)
+        if centers is None:
+            self.log.info("no projection centers available: taking the principal branch "
+                          "of Im ln M_nn")
+            return
+        self.guide_centres = np.array(centers) @ self.nnkp.a      # crystal -> cartesian
+        self.log.info("taking the branch of Im ln M_nn closest to the projection centers")
+
+    def _imln_mnn(self, mnn):
+        """Im ln M_nn, on the branch closest to the guide centres."""
+        if self.guide_centres is None:
+            return np.log(mnn).imag
+        # the phase a Wannier function sitting on the guide center would have
+        pred = - np.einsum("ba,na->bn", self.bvec, self.guide_centres, optimize=True)
+        return pred[np.newaxis,:,:] + np.log(mnn * np.exp(-1j*pred)[np.newaxis,:,:]).imag
+
     def calc_omega(self, mmn):
         """Calculate total spread functional Omega.
         
@@ -326,7 +358,7 @@ class Wannierize:
         # Cache for reuse in calc_omega_detail and calc_dw
         self._cached_mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
         self._assert_nonzero_mnn(self._cached_mnn, "calc_omega")
-        self._cached_imlnmnn = np.log(self._cached_mnn).imag
+        self._cached_imlnmnn = self._imln_mnn(self._cached_mnn)
         self._cached_r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, self._cached_imlnmnn, optimize=True)
         
         r2a = np.sum(self.wb)*self.nk - np.einsum("b,kbn,kbn->n", self.wb, self._cached_mnn, np.conj(self._cached_mnn), optimize=True)
@@ -362,7 +394,7 @@ class Wannierize:
         else:
             mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
             self._assert_nonzero_mnn(mnn, "calc_omega_detail")
-            imlnmnn = np.log(mnn).imag
+            imlnmnn = self._imln_mnn(mnn)
         
         r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
         qn = imlnmnn + np.einsum("ba, na->bn", self.bvec, r, optimize=True)[np.newaxis,:,:]
@@ -393,7 +425,7 @@ class Wannierize:
         else:
             mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
             self._assert_nonzero_mnn(mnn, "calc_dw")
-            imlnmnn = np.log(mnn).imag
+            imlnmnn = self._imln_mnn(mnn)
             r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
         
         Rmn = np.einsum("kbmn,kbn->kbmn", self.mmn, np.conj(mnn), optimize=True)  # R1_Eq.(45)
@@ -742,7 +774,7 @@ class Wannierize:
         ham_r, fac = self.calc_ham_r()
 
         mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
-        imlnmnn = np.log(mnn).imag
+        imlnmnn = self._imln_mnn(mnn)
         rk = - np.einsum("b,ba,kbn->ank", self.wb, self.bvec, imlnmnn, optimize=True)
         rr = np.einsum("ank,kr->anr", rk, fac, optimize=True)/self.nk
         rr2 = 1j * np.einsum("b,ba,kbmn,kr->amnr", self.wb, self.bvec, self.mmn, fac, optimize=True)/self.nk
