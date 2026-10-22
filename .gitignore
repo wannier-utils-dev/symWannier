@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+
+# local instructions for Claude Code, not part of the package
+CLAUDE.md
