@@ -90,6 +90,26 @@ image far from the origin still localizes. wannier90 calls the same idea
 ```guiding_centres``` and has it off by default; here it is on unless the win file
 says ```guiding_centres = .false.```, which restores the principal branch.
 
+### Running on several MPI ranks
+
+```symwannier wannierize``` distributes the k-points of the full mesh over MPI
+ranks when started under a launcher:
+```
+pip install symWannier[mpi]        # mpi4py, built against the MPI of your mpirun
+mpirun -n 8 symwannier wannierize -s prefix
+```
+Each rank holds the overlap matrices of its own block of k-points only, which is
+where the memory goes, so the run can be spread over nodes for memory as well as
+for time. The results are those of a serial run up to the order in which the sums
+over k are taken, which moves them by about 1e-12. Only rank 0 prints and writes
+files. ```symwannier expand``` is not distributed and refuses to start on more
+than one rank.
+
+Prefer ranks to threads: start one rank per core with ```OMP_NUM_THREADS=1```.
+The overlap matrices are small matrices in large batches, which BLAS threads
+speed up little - for a 1000 k-point calculation, 8 threads made the run 4%
+faster, while 8 ranks made it 4.5 times faster.
+
 
 ## Bundled pw2wannier90 interfaces
 

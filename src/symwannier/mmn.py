@@ -5,11 +5,12 @@ import itertools
 import logging
 
 from symwannier.io_utils import open_text_or_gz
+from symwannier.kdist import KDist
 
 class Mmn:
     """Reader for mmn files (overlap matrices between neighboring k-points)."""
 
-    def __init__(self, file_mmn, nnkp, sym=None, log=None):
+    def __init__(self, file_mmn, nnkp, sym=None, log=None, kd=None):
         """Load Mmn data and set up k-space neighbor mappings.
 
         Parameters
@@ -22,12 +23,17 @@ class Mmn:
             Symmetry data for IBZ handling.
         log : logging.Logger, optional
             Logger instance.
+        kd : KDist, optional
+            Distribution of the k-points over MPI ranks. self.mmn then holds only
+            this rank's block [kd.k0, kd.k1) of the full mesh, while kb2k still
+            covers the whole mesh. Without it every k-point is held.
         """
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
             logging.basicConfig(level=logging.INFO, format="%(message)s")
         self.nnkp = nnkp
         self.sym = sym
+        self.kd = kd if kd is not None else KDist(nnkp.nk)
 
         # Determine if immn based on file extension
         ibz = file_mmn.endswith(".immn")
@@ -81,16 +87,25 @@ class Mmn:
             self.log.info("the b-vector shell has no -b for every b; skipping the band check")
             return np.full([self.nk], self.num_bands), None
 
-        n_bands = np.full([self.nk], self.num_bands, dtype=int)
-        for ik in range(self.nk):
-            dev = np.max(np.abs(self.mmn[ik,:,:,:]
-                                - np.conj(self.mmn[self.kb2k[ik,:], opp, :, :]).transpose(0,2,1)), axis=0)
+        # M(k+b,-b) lives on whichever rank owns k+b. It is fetched one b at a time,
+        # since all of them at once would be as large again as the block of Mmn
+        kd = self.kd
+        kb2k_loc = kd.local(self.kb2k)
+        dev_loc = np.zeros([kd.nk_loc, self.num_bands, self.num_bands])
+        for ib in range(self.nb):
+            back = kd.plan(kb2k_loc[:, ib]).fetch(self.mmn[:, opp[ib], :, :])
+            dev_loc = np.maximum(dev_loc, np.abs(self.mmn[:, ib, :, :] - np.conj(back).transpose(0,2,1)))
+
+        n_loc = np.full([kd.nk_loc], self.num_bands, dtype=int)
+        for il in range(kd.nk_loc):
+            dev = dev_loc[il]
             run = 0.0
             for n in range(self.num_bands):
                 run = max(run, dev[n,:n+1].max(), dev[:n+1,n].max())
                 if run > thr:
-                    n_bands[ik] = n
+                    n_loc[il] = n
                     break
+        n_bands = kd.allgather(n_loc)
 
         affected = np.flatnonzero(n_bands < self.num_bands)
         if len(affected) == 0:
@@ -114,6 +129,8 @@ class Mmn:
 
     def write_mmn(self, file_mmn):
         """Write overlap matrices to file in wannier90 format."""
+        if not self.kd.serial:
+            raise NotImplementedError("write_mmn needs every k-point on one rank")
         with open(file_mmn, "w") as fp:
             fp.write("Mmn created by mmn.py\n")
             fp.write("{} {} {}\n".format(self.num_bands, self.nk, self.nb))
@@ -170,7 +187,11 @@ class Mmn:
             raise ValueError("mmn file missing header line")
         self.num_bands, self.nks, self.nb = [ int(x) for x in header.split() ]
 
-        self.mmn = np.zeros([self.nks, self.nb, self.num_bands, self.num_bands], dtype=complex)
+        # A plain mmn file covers the full mesh, and only this rank's block of it is
+        # kept. The irreducible file is kept whole: any k-point of the full mesh may
+        # be expanded from any irreducible one.
+        keep0, keep1 = (0, self.nks) if ibz else (self.kd.k0, self.kd.k1)
+        self.mmn = np.zeros([keep1 - keep0, self.nb, self.num_bands, self.num_bands], dtype=complex)
         self.kpb_info = np.zeros([self.nks, self.nb, 5], dtype=int)
 
         block_size = self.num_bands * self.num_bands
@@ -185,9 +206,11 @@ class Mmn:
             block_lines = list(itertools.islice(fp, block_size))
             if len(block_lines) != block_size:
                 raise ValueError("mmn file ended unexpectedly while reading data block")
+            if not keep0 <= ik < keep1:
+                continue
             flat = np.fromstring(" ".join(block_lines), sep=" ")
             data = flat.reshape(self.num_bands, self.num_bands, 2)
-            self.mmn[ik,ib,:,:] = data[:,:,0].T + 1j * data[:,:,1].T
+            self.mmn[ik-keep0,ib,:,:] = data[:,:,0].T + 1j * data[:,:,1].T
 
     def _mmn_full_klist(self):
         if self.sym is None:
@@ -203,7 +226,11 @@ class Mmn:
             # Reorder one k-point at a time to avoid duplicating the full
             # MMN array, which can be large for many bands and k-points.
             for ik in range(self.nk):
-                mmn_ik = self.mmn[ik, :, :, :].copy()
+                # kb2k is needed for every k-point, the blocks only for the local ones
+                local = self.kd.is_local(ik)
+                if local:
+                    il = ik - self.kd.k0
+                    mmn_ik = self.mmn[il, :, :, :].copy()
                 kpb_info_ik = self.kpb_info[ik, :, :].copy()
                 found = np.zeros(self.nb, dtype=bool)
 
@@ -232,7 +259,8 @@ class Mmn:
                         )
 
                     found[ibt] = True
-                    self.mmn[ik, ibt, :, :] = mmn_ik[ib, :, :]
+                    if local:
+                        self.mmn[il, ibt, :, :] = mmn_ik[ib, :, :]
                     self.kpb_info[ik, ibt, :] = info
                     self.kb2k[ik, ibt] = ikb
 
@@ -245,10 +273,16 @@ class Mmn:
 
         ####### symmetrized case #######
         else:
-            mmn = np.zeros([self.nk, self.nb, self.num_bands, self.num_bands], dtype=complex)
+            mmn = np.zeros([self.kd.nk_loc, self.nb, self.num_bands, self.num_bands], dtype=complex)
 
             bvec_equiv = self.sym.kpoint_equiv_info(self.nnkp.bvec_crys)
             for ikf, kf in enumerate(self.sym.full_kpoints):
+                if not self.kd.is_local(ikf):
+                    # kb2k is needed for every k-point, the expansion only for the local ones
+                    for ibf, bf in enumerate(self.nnkp.bvec_crys):
+                        self.kb2k[ikf,ibf] = self.sym.search_ik_full(kf + bf)
+                    continue
+                il = ikf - self.kd.k0
                 # s[isym] . irr_k[iki] = full_k[ikf]
                 iki = self.sym.equiv[ikf]
                 isym1 = self.sym.equiv_sym[ikf]
@@ -272,11 +306,11 @@ class Mmn:
 
                     self.kb2k[ikf,ibf] = ikbf
                     if self.sym.t_rev[isym2] == 1:
-                        mmn[ikf,ibf,:,:] = np.einsum("mn,np->mp", self.mmn[iki,ibi,:,:], np.conj(self.sym.repmat[ikbi_eq,isym,:,:]), optimize=True) * factor
+                        mmn[il,ibf,:,:] = np.einsum("mn,np->mp", self.mmn[iki,ibi,:,:], np.conj(self.sym.repmat[ikbi_eq,isym,:,:]), optimize=True) * factor
                     else:
-                        mmn[ikf,ibf,:,:] = np.einsum("mn,np->mp", self.mmn[iki,ibi,:,:], self.sym.repmat[ikbi_eq,isym,:,:], optimize=True) * factor
+                        mmn[il,ibf,:,:] = np.einsum("mn,np->mp", self.mmn[iki,ibi,:,:], self.sym.repmat[ikbi_eq,isym,:,:], optimize=True) * factor
                     if self.sym.t_rev[isym1] == 1:
-                        mmn[ikf,ibf,:,:] = np.conj(mmn[ikf,ibf,:,:])
+                        mmn[il,ibf,:,:] = np.conj(mmn[il,ibf,:,:])
 
                     # e^{-i b_i T} 
                     #   from g0^-1 e^{-i b_f r} => e^{i b_i r} g0^-1 x e^{-i b_i T}
@@ -293,7 +327,7 @@ class Mmn:
                     if self.sym.t_rev[isym] == 1:
                         arg2 *= -1
                     phase = np.exp( 2j*np.pi* (arg1 + arg2) )
-                    mmn[ikf,ibf,:,:] *= phase
+                    mmn[il,ibf,:,:] *= phase
 
             self.mmn = mmn
 

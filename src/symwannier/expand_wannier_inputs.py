@@ -15,6 +15,7 @@ from symwannier.mmn import Mmn
 from symwannier.eig import Eig
 from symwannier.dmn import Dmn
 from symwannier.spn import Spn
+from symwannier.kdist import world_comm
 
 def main(argv=None, for_cli=False):
     """Expand symmetry-reduced Wannier input files to full k-point sets.
@@ -57,6 +58,11 @@ def main(argv=None, for_cli=False):
 
     args = parser.parse_args(argv)
     prefix = args.prefix
+
+    # the expansion is not distributed: on several ranks every one of them would
+    # write the same files at once
+    if world_comm() is not None:
+        raise RuntimeError("symwannier expand runs on a single rank; start it without mpirun")
 
     nnkp = Nnkp(file_nnkp=prefix+".nnkp", log=log)
     sym = Sym(file_sym=prefix+".isym", nnkp=nnkp, log=log)

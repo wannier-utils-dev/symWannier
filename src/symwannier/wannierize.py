@@ -15,6 +15,7 @@ import itertools
 import textwrap
 import datetime
 import argparse
+import os
 import sys
 import logging
 
@@ -25,6 +26,7 @@ from symwannier.sym import Sym
 from symwannier.eig import Eig
 from symwannier.nnkp import Nnkp
 from symwannier.timedata import TimeData
+from symwannier.kdist import KDist, world_comm
 
 class Wannierize:
     """Compute maximally localized (and symmetry-adapted) Wannier functions.
@@ -48,9 +50,19 @@ class Wannierize:
         Logging level (e.g., logging.DEBUG, logging.INFO, or 'DEBUG', 'INFO').
     log : logging.Logger, optional
         Logger to use; if not provided a module logger is created.
+    comm : mpi4py communicator, optional
+        Distribute the k-points of the full mesh over the ranks of comm. Mmn and
+        everything derived from it, and the rotations Umat and Umat_opt, then hold
+        only this rank's block of k-points, while Amn, the eigenvalues and the
+        windows are kept whole on every rank. The spreads, centers and outputs are
+        the same on every rank, and only rank 0 writes files. Two things are left
+        to the caller, as main() does them: silencing the other ranks, which print
+        too, and calling comm.Abort() on an exception. An error found at one
+        k-point is raised only on the rank that holds it, and the others would wait
+        for that rank in their next exchange for as long as the job runs.
     """
 
-    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, projectability_disentangle=False, log_level=None, log=None, snap_kp=True):
+    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, projectability_disentangle=False, log_level=None, log=None, snap_kp=True, comm=None):
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
             # Determine log level
@@ -68,6 +80,10 @@ class Wannierize:
         self.log.debug(f"Loaded win: num_wann={self.win.num_wann}")
         self.nnkp = Nnkp(prefix + ".nnkp", log=self.log, snap_kp=snap_kp)
         self.log.debug(f"Loaded nnkp: nk={self.nnkp.nk}, nb={self.nnkp.nb}, num_wann={self.nnkp.num_wann}")
+        self.kd = KDist(self.nnkp.nk, comm)
+        if not self.kd.serial:
+            self.log.info("k-points distributed over %d MPI ranks, %d to %d per rank",
+                          self.kd.size, min(self.kd.counts), max(self.kd.counts))
         self.lsym = lsym
         self.lsite_sym = lsite_sym
         self.prec = prec
@@ -87,7 +103,7 @@ class Wannierize:
             ext = ''
 
         self.time.start_clock("mmn read")
-        mmn = Mmn(file_mmn = prefix+"." + ext + "mmn", nnkp=self.nnkp, sym=self.sym, log=self.log)
+        mmn = Mmn(file_mmn = prefix+"." + ext + "mmn", nnkp=self.nnkp, sym=self.sym, log=self.log, kd=self.kd)
         self.time.stop_clock("mmn read")
         self.log.debug(f"Loaded Mmn: shape={mmn.mmn.shape}")
 
@@ -99,7 +115,9 @@ class Wannierize:
         self.nb = self.nnkp.nb
         self.bvec = self.nnkp.bvec
         self.wb = self.nnkp.wb
-        self.kb2k = mmn.kb2k   # index of k+b
+        self.kb2k = mmn.kb2k   # index of k+b, for every k-point of the mesh
+        # U(k+b) for the local k-points, wherever k+b is held
+        self._kb_plan = self.kd.plan(self.kd.local(self.kb2k))
 
         self.time.start_clock("amn read")
         self.amn = Amn(prefix+"." + ext + "amn", nnkp=self.nnkp, sym=self.sym, log=self.log)
@@ -212,9 +230,9 @@ class Wannierize:
             self.Umat = np.einsum("kmn,knp->kmp", self.Umat_opt, self.Umat, optimize=True)
 
         if self.lsite_sym:
-            Umat_irk = self.Umat[self.sym.iks2ik[:]]
+            Umat_irk = self.kd.allgather(self.Umat)[self.sym.iks2ik[:]]
             Umat_irk = self.amn.symmetrize_Gk(Umat_irk)
-            self.Umat = self.amn.symmetrize_expand(Umat_irk)
+            self.Umat = self.kd.local(self.amn.symmetrize_expand(Umat_irk))
 
         self.mmn = self.update_Mmn_by_Umat(self.mmn0, self.Umat)
         self.calc_omega_detail(self.mmn)
@@ -229,8 +247,8 @@ class Wannierize:
         if self.num_wann > self.num_bands:
             raise ValueError("num_wann ({}) must not exceed num_bands ({})".format(self.num_wann, self.num_bands))
 
-        if self.mmn0.shape[0] != self.nnkp.nk or self.mmn0.shape[1] != self.nnkp.nb:
-            raise ValueError("mmn shape {} inconsistent with nk={} or nb={}".format(self.mmn0.shape, self.nnkp.nk, self.nnkp.nb))
+        if self.mmn0.shape[0] != self.kd.nk_loc or self.mmn0.shape[1] != self.nnkp.nb:
+            raise ValueError("mmn shape {} inconsistent with nk={} or nb={}".format(self.mmn0.shape, self.kd.nk_loc, self.nnkp.nb))
 
         if getattr(self.amn, "nk", None) and self.amn.nk != self.nnkp.nk:
             raise ValueError("amn nk={} inconsistent with nnkp nk={}".format(self.amn.nk, self.nnkp.nk))
@@ -262,15 +280,11 @@ class Wannierize:
         ndarray, shape (nk, nb, num_wann, num_wann)
             Rotated overlap matrices.
         """
-        # U^k(dagger)[k,1,m,l] Mmn[k,b,l,p] U^(k+b)[k,b,p,n]; batched matmul uses BLAS
+        # U^k(dagger)[k,1,m,l] Mmn[k,b,l,p] U^(k+b)[k,b,p,n]; batched matmul uses BLAS.
+        # Both are this rank's block of k-points, and U^(k+b) is fetched from
+        # whichever rank holds k+b
         Umat_dag = np.conj(Umat).swapaxes(1, 2)[:, None, :, :]
-        if not self.optimize_memory_usage:
-            # Pre-compute indexed Umat for all k+b pairs to avoid repeated indexing
-            Umat_kpb = Umat[self.kb2k.ravel()].reshape(self.nk, self.nb, Umat.shape[1], Umat.shape[2])
-            return np.matmul(np.matmul(Umat_dag, mmn), Umat_kpb)
-        else:
-            # Memory-efficient: re-index on each call (no pre-computation)
-            return np.matmul(np.matmul(Umat_dag, mmn), Umat[self.kb2k[:,:],:,:])
+        return np.matmul(np.matmul(Umat_dag, mmn), self._kb_plan.fetch(Umat))
 
     def init_Umat_and_Mmn(self):
         """
@@ -280,7 +294,10 @@ class Wannierize:
         self.log.debug(f"init_Umat_and_Mmn: disentangle={self.disentangle}")
         if self.disentangle:
             self.log.info("init Umatrix and Mmn using Umatrix_opt")
-            self.Umat = self.amn.Umat(index_win=self.index_win, Umat_opt=self.Umat_opt)
+            # Amn.Umat symmetrizes through the irreducible k-points, so it needs
+            # Umat_opt on the whole mesh
+            Umat_opt = self.kd.allgather(self.Umat_opt)
+            self.Umat = self.kd.local(self.amn.Umat(index_win=self.index_win, Umat_opt=Umat_opt))
             self.mmn1 = self.update_Mmn_by_Umat(self.mmn0, self.Umat_opt)
             self.mmn = self.update_Mmn_by_Umat(self.mmn1, self.Umat)
             self.calc_omega_detail(self.mmn)
@@ -288,12 +305,12 @@ class Wannierize:
         else:  # without disentangle
             self.log.info("init Umatrix and Mmn")
             if hasattr(self, "amn"):
-                self.Umat = self.amn.Umat()
+                self.Umat = self.kd.local(self.amn.Umat())
                 self.mmn1 = self.mmn0
                 self.mmn = self.update_Mmn_by_Umat(self.mmn1, self.Umat)
 
             else:
-                self.Umat = np.zeros([self.nk, self.num_bands, self.num_bands], dtype=complex)
+                self.Umat = np.zeros([self.kd.nk_loc, self.num_bands, self.num_bands], dtype=complex)
                 for n in range(self.num_bands):
                     self.Umat[:,n,n] = 1
                 self.mmn1 = self.mmn0
@@ -359,10 +376,10 @@ class Wannierize:
         self._cached_mnn = np.einsum("kbnn->kbn", mmn, optimize=True)
         self._assert_nonzero_mnn(self._cached_mnn, "calc_omega")
         self._cached_imlnmnn = self._imln_mnn(self._cached_mnn)
-        self._cached_r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, self._cached_imlnmnn, optimize=True)
+        self._cached_r = -1/self.nk * self.kd.sum(np.einsum("b,ba,kbn->na", self.wb, self.bvec, self._cached_imlnmnn, optimize=True))
         
-        r2a = np.sum(self.wb)*self.nk - np.einsum("b,kbn,kbn->n", self.wb, self._cached_mnn, np.conj(self._cached_mnn), optimize=True)
-        r2b = np.einsum("b,kbn->n", self.wb, self._cached_imlnmnn**2)
+        r2a = np.sum(self.wb)*self.nk - self.kd.sum(np.einsum("b,kbn,kbn->n", self.wb, self._cached_mnn, np.conj(self._cached_mnn), optimize=True))
+        r2b = self.kd.sum(np.einsum("b,kbn->n", self.wb, self._cached_imlnmnn**2))
         r2 = 1/self.nk * (r2a + r2b).real
         self.r = self._cached_r
         
@@ -382,10 +399,10 @@ class Wannierize:
             Overlap matrices M^(k,b)_mn.
         """
         mmn2 = np.einsum("kbmn,kbmn->kb", mmn, np.conj(mmn), optimize=True).real
-        OmegaI = np.einsum("b, kb->", self.wb, self.num_wann - mmn2, optimize=True)/self.nk
+        OmegaI = self.kd.sum(np.einsum("b, kb->", self.wb, self.num_wann - mmn2, optimize=True))/self.nk
 
         mnn2 = np.einsum("kbnn,kbnn->kb", mmn, np.conj(mmn), optimize=True).real
-        OmegaOD = np.einsum("b, kb->", self.wb, mmn2 - mnn2, optimize=True)/self.nk
+        OmegaOD = self.kd.sum(np.einsum("b, kb->", self.wb, mmn2 - mnn2, optimize=True))/self.nk
 
         # Reuse cached values if available (set by calc_omega)
         if hasattr(self, '_cached_mnn') and hasattr(self, '_cached_imlnmnn'):
@@ -396,9 +413,9 @@ class Wannierize:
             self._assert_nonzero_mnn(mnn, "calc_omega_detail")
             imlnmnn = self._imln_mnn(mnn)
         
-        r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
+        r = -1/self.nk * self.kd.sum(np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True))
         qn = imlnmnn + np.einsum("ba, na->bn", self.bvec, r, optimize=True)[np.newaxis,:,:]
-        OmegaD = np.einsum("b, kbn->", self.wb, qn**2, optimize=True)/self.nk
+        OmegaD = self.kd.sum(np.einsum("b, kbn->", self.wb, qn**2, optimize=True))/self.nk
 
         print("  OmegaI  = {:15.10f}".format(OmegaI))
         print("  OmegaD  = {:15.10f}".format(OmegaD))
@@ -426,7 +443,7 @@ class Wannierize:
             mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
             self._assert_nonzero_mnn(mnn, "calc_dw")
             imlnmnn = self._imln_mnn(mnn)
-            r = -1/self.nk * np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True)
+            r = -1/self.nk * self.kd.sum(np.einsum("b,ba,kbn->na", self.wb, self.bvec, imlnmnn, optimize=True))
         
         Rmn = np.einsum("kbmn,kbn->kbmn", self.mmn, np.conj(mnn), optimize=True)  # R1_Eq.(45)
         qn = imlnmnn + np.einsum("ba, na->bn", self.bvec, r, optimize=True)[np.newaxis,:,:] # R1_Eq.(47)
@@ -624,13 +641,15 @@ class Wannierize:
         """Calculate self.Umat_opt and update mmn0 from amn file."""
         self.log.debug("dis_project: starting projection")
         assert hasattr(self, "amn"), "file_amn is not specified"
-        self.Umat_opt = self.amn.Umat(index_win = self.index_win)  # Umat_opt[:num_bands, :num_wann, :nk]
+        # Umat_opt[:nk_loc, :num_bands, :num_wann], this rank's block of k-points
+        self.Umat_opt = self.kd.local(self.amn.Umat(index_win = self.index_win)).copy()
 
         # dis_proj_froz in wannier90
         # wannier90 uses ortho-fix which is not implemented here
-        for k in range(self.nk):
+        for kl in range(self.kd.nk_loc):
+            k = self.kd.k0 + kl   # index_win, index_froz and ndimfroz cover the whole mesh
             # cqpq = Q_inner P_G Q_inner in R2_Eq.(27)
-            Umatk = self.Umat_opt[k,self.index_win[k,:],:]
+            Umatk = self.Umat_opt[kl,self.index_win[k,:],:]
             lnfroz = (~self.index_froz[ k, self.index_win[k,:] ]).astype(int)
             cqpq = np.einsum("m,ml,nl,n->mn", lnfroz, Umatk, np.conj(Umatk), lnfroz, optimize=True)
             # check hermiticity
@@ -643,9 +662,9 @@ class Wannierize:
                     "the disentanglement window at k-point {} contains no state; "
                     "widen dis_win_min / dis_win_max".format(k+1))
             e, v = scipy.linalg.eigh(-cqpq)  # "-" sign for descending order
-            self.Umat_opt[k,:,:] = 0
-            self.Umat_opt[k, self.index_froz[k,:], :self.ndimfroz[k]] = np.identity(self.ndimfroz[k])
-            self.Umat_opt[k, self.index_win[k,:], self.ndimfroz[k]:self.num_wann] = v[:, :self.num_wann - self.ndimfroz[k]]
+            self.Umat_opt[kl,:,:] = 0
+            self.Umat_opt[kl, self.index_froz[k,:], :self.ndimfroz[k]] = np.identity(self.ndimfroz[k])
+            self.Umat_opt[kl, self.index_win[k,:], self.ndimfroz[k]:self.num_wann] = v[:, :self.num_wann - self.ndimfroz[k]]
 
             # check unitary
             #assert np.allclose( np.matmul(np.transpose(np.conj(self.Umat_opt[:,:,k])), self.Umat_opt[:,:,k]), np.eye(self.num_wann) )
@@ -656,7 +675,7 @@ class Wannierize:
         """
         update mmn0U = mmn0[num_bands, num_win] x Umat_opt[num_win, num_wann]
         """
-        self.mmn0U = np.matmul(self.mmn0, self.Umat_opt[self.kb2k[:,:],:,:])  # Eq. (61)
+        self.mmn0U = np.matmul(self.mmn0, self._kb_plan.fetch(self.Umat_opt))  # Eq. (61)
 
     def init_zmatrix(self):
         """
@@ -667,21 +686,23 @@ class Wannierize:
         """
         # mu = mmn0[num_bands, num_win] x Umat_opt[num_win, num_wann]
         # zmat = mu x mu^\dagger
-        zmat_froz = np.zeros([self.nk, self.num_bands, self.num_bands], dtype=complex)
-        zmat_nfroz = np.zeros([self.nk, self.num_bands, self.num_bands], dtype=complex)
+        nk_loc = self.kd.nk_loc
+        zmat_froz = np.zeros([nk_loc, self.num_bands, self.num_bands], dtype=complex)
+        zmat_nfroz = np.zeros([nk_loc, self.num_bands, self.num_bands], dtype=complex)
         # zmat[k,m,n] = sum_{b,l} wb[b] mu[k,b,m,l] conj(mu[k,b,n,l]); contract over (b,l) with batched matmul
-        mu = self.mmn0U.transpose(0, 2, 1, 3).reshape(self.nk, self.num_bands, -1)
-        mu_wb = (self.mmn0U * self.wb[None, :, None, None]).transpose(0, 2, 1, 3).reshape(self.nk, self.num_bands, -1)
+        mu = self.mmn0U.transpose(0, 2, 1, 3).reshape(nk_loc, self.num_bands, -1)
+        mu_wb = (self.mmn0U * self.wb[None, :, None, None]).transpose(0, 2, 1, 3).reshape(nk_loc, self.num_bands, -1)
         zmat = np.matmul(mu_wb, np.conj(mu).swapaxes(1, 2))
-        for k in range(self.nk):
-            zmat_froz[k,:self.ndimfroz[k],:self.ndimfroz[k]] = zmat[k, self.index_froz[k,:], :][:, self.index_froz[k,:]]
-            zmat_nfroz[k,:self.len_nfroz[k],:self.len_nfroz[k]] = zmat[k, self.index_nfroz[k,:], :][:, self.index_nfroz[k,:]]
+        for kl in range(nk_loc):
+            k = self.kd.k0 + kl
+            zmat_froz[kl,:self.ndimfroz[k],:self.ndimfroz[k]] = zmat[kl, self.index_froz[k,:], :][:, self.index_froz[k,:]]
+            zmat_nfroz[kl,:self.len_nfroz[k],:self.len_nfroz[k]] = zmat[kl, self.index_nfroz[k,:], :][:, self.index_nfroz[k,:]]
 
         return zmat_froz, zmat_nfroz
 
     def calc_womegaI(self):
         mmn = np.matmul(np.conj(self.Umat_opt).swapaxes(1, 2)[:, None, :, :], self.mmn0U)
-        return self.num_wann * np.sum(self.wb) - np.einsum("b,kbmn,kbmn->", self.wb, mmn, np.conj(mmn), optimize=True).real/self.nk
+        return self.num_wann * np.sum(self.wb) - self.kd.sum(np.einsum("b,kbmn,kbmn->", self.wb, mmn, np.conj(mmn), optimize=True)).real/self.nk
 
     def dis_extract(self):
         for i in range(self.win.dis_num_iter):
@@ -693,20 +714,21 @@ class Wannierize:
             # zmat_froz is zero outside the frozen block, so the full trace equals the block trace
             wkomegaI1 = self.num_wann * np.sum(self.wb) - np.trace(zmat_froz, axis1=1, axis2=2).real
 
-            for k in range(self.nk):
+            for kl in range(self.kd.nk_loc):
+                k = self.kd.k0 + kl
                 # Here, we consider -Z because we need eigvals of Z in descending order
-                e, v = scipy.linalg.eigh(-zmat_nfroz[k, :self.len_nfroz[k], :self.len_nfroz[k]])
+                e, v = scipy.linalg.eigh(-zmat_nfroz[kl, :self.len_nfroz[k], :self.len_nfroz[k]])
                 e = -e
-                wkomegaI1[k] -= np.sum( e[:(self.num_wann-self.ndimfroz[k])] )
+                wkomegaI1[kl] -= np.sum( e[:(self.num_wann-self.ndimfroz[k])] )
 
-                self.Umat_opt[k, self.index_win[k,:], self.ndimfroz[k]:self.num_wann] = 0
-                self.Umat_opt[k, self.index_nfroz[k,:], self.ndimfroz[k]:self.num_wann] = v[:,:self.num_wann-self.ndimfroz[k]]
+                self.Umat_opt[kl, self.index_win[k,:], self.ndimfroz[k]:self.num_wann] = 0
+                self.Umat_opt[kl, self.index_nfroz[k,:], self.ndimfroz[k]:self.num_wann] = v[:,:self.num_wann-self.ndimfroz[k]]
 
                 # check unitary
                 #assert np.allclose( np.matmul(np.transpose(np.conj(self.Umat_opt[:,:,k])), self.Umat_opt[:,:,k]), np.eye(self.num_wann) )
             self.update_mmn0U()
             
-            womegaI1 = np.sum(wkomegaI1)/self.nk
+            womegaI1 = self.kd.sum(np.sum(wkomegaI1))/self.nk
 
             womegaI = self.calc_womegaI()
 
@@ -742,15 +764,17 @@ class Wannierize:
 
         Requires ``self.irvec`` (see ``calc_irvec``).
         """
-        ham_k = np.einsum("kni,kn,knj->kij", np.conj(self.Umat), self.eig.eig, self.Umat, optimize=True)
-        kr = np.einsum("ka,ra->kr", self.kpts, self.irvec, optimize=True)
-        fac = np.exp(-2 * np.pi * 1j * kr)
-        ham_r = np.einsum("kij,kr->ijr", ham_k, fac, optimize=True)/self.nk
+        ham_k = np.einsum("kni,kn,knj->kij", np.conj(self.Umat), self.kd.local(self.eig.eig), self.Umat, optimize=True)
+        kr = np.einsum("ka,ra->kr", self.kd.local(self.kpts), self.irvec, optimize=True)
+        fac = np.exp(-2 * np.pi * 1j * kr)   # for this rank's k-points
+        ham_r = self.kd.sum(np.einsum("kij,kr->ijr", ham_k, fac, optimize=True))/self.nk
         return ham_r, fac
 
     def write_hr(self):
         self.calc_irvec()
         ham_r, _ = self.calc_ham_r()
+        if not self.kd.is_root:
+            return
 
         t = datetime.datetime.now()
         with open(self.file_hr_dat, "w") as fp:
@@ -776,8 +800,10 @@ class Wannierize:
         mnn = np.einsum("kbnn->kbn", self.mmn, optimize=True)
         imlnmnn = self._imln_mnn(mnn)
         rk = - np.einsum("b,ba,kbn->ank", self.wb, self.bvec, imlnmnn, optimize=True)
-        rr = np.einsum("ank,kr->anr", rk, fac, optimize=True)/self.nk
-        rr2 = 1j * np.einsum("b,ba,kbmn,kr->amnr", self.wb, self.bvec, self.mmn, fac, optimize=True)/self.nk
+        rr = self.kd.sum(np.einsum("ank,kr->anr", rk, fac, optimize=True))/self.nk
+        rr2 = 1j * self.kd.sum(np.einsum("b,ba,kbmn,kr->amnr", self.wb, self.bvec, self.mmn, fac, optimize=True))/self.nk
+        if not self.kd.is_root:
+            return
 
         t = datetime.datetime.now()
         with open(self.file_tb_dat, "w") as fp:
@@ -885,8 +911,26 @@ def main(argv=None, for_cli=False):
 
     args = parser.parse_args(argv)
 
-    wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, projectability_disentangle=args.projectability_disentangle, log_level=args.log_level, snap_kp=args.snap_kp)
-    wann.run()
+    # under mpirun / srun the k-points are distributed over the ranks; only rank 0
+    # reports, and the others keep their errors
+    comm = world_comm()
+    log_level = args.log_level
+    if comm is not None and comm.Get_rank() != 0:
+        sys.stdout = open(os.devnull, "w")
+        log_level = "ERROR"
+
+    try:
+        wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, projectability_disentangle=args.projectability_disentangle, log_level=log_level, snap_kp=args.snap_kp, comm=comm)
+        wann.run()
+    except Exception:
+        if comm is None:
+            raise
+        # an error found at one k-point is raised only on the rank that holds it, and
+        # the others would wait for it in their next sum for as long as the job runs
+        import traceback
+        traceback.print_exc()
+        sys.stderr.flush()
+        comm.Abort(1)
 
 
 if __name__ == '__main__':
