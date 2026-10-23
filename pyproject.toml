@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+mpi = ["mpi4py"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

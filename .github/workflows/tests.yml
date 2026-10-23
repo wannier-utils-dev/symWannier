@@ -23,3 +23,19 @@ jobs:
       - run: pip install -e ".[dev]"
 
       - run: pytest -q
+
+  # the k-point distribution, under a real launcher; the job above skips these
+  mpi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: sudo apt-get update && sudo apt-get install -y libopenmpi-dev openmpi-bin
+
+      - run: pip install -e ".[dev,mpi]"
+
+      - run: pytest -q tests/test_kdist.py tests/test_mpi.py
