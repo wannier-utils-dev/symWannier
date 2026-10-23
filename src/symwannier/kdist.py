@@ -3,32 +3,57 @@
 import os
 import numpy as np
 
-# set by mpirun / srun for every task they start, and by nothing else
-_LAUNCHER_RANK_VARS = ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "PMIX_RANK", "MV2_COMM_WORLD_RANK")
-_LAUNCHER_SIZE_VARS = ("OMPI_COMM_WORLD_SIZE", "PMI_SIZE", "MV2_COMM_WORLD_SIZE", "SLURM_STEP_NUM_TASKS")
+# Set for every process an MPI launcher starts - mpirun, or a scheduler's launcher
+# with an MPI plugin, such as srun --mpi=pmix. They belong to MPI's process
+# management, not to the scheduler: the scheduler's own variables differ from one
+# system to the next and describe the job rather than the processes MPI started.
+_MPI_RANK_VARS = ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "PMIX_RANK", "MV2_COMM_WORLD_RANK")
+_MPI_SIZE_VARS = ("OMPI_COMM_WORLD_SIZE", "PMI_SIZE", "MV2_COMM_WORLD_SIZE")
+
+
+def _int_env(names):
+    """The first of the variables that is set to an integer, or None."""
+    for v in names:
+        if os.environ.get(v, "").isdigit():
+            return int(os.environ[v])
+    return None
 
 
 def world_comm():
-    """MPI.COMM_WORLD when the process was started by an MPI launcher on several ranks.
+    """MPI.COMM_WORLD when the process was started by an MPI launcher as one of several.
 
-    Returns None otherwise, without importing mpi4py: importing it initializes MPI,
-    which a serial run has no reason to do. Started on several ranks without mpi4py,
-    every rank would run the whole calculation and write the same files, so that
-    raises instead.
+    Returns None otherwise, without importing mpi4py outside an MPI launcher:
+    importing it initializes MPI, which a serial run has no reason to do. Started
+    as one of several processes, every process would run the whole calculation and
+    write the same files unless they share a communicator, so it raises when they
+    cannot - when mpi4py is missing, and when MPI sees the process as a run of its
+    own. Several processes are recognized from the size the launcher reports, or,
+    where it reports only the rank (PMIx), from a rank above 0.
+
+    A launcher that starts the processes without telling MPI - a scheduler's launcher
+    with no MPI plugin - leaves nothing to recognize them by, and each runs serially.
     """
-    if not any(v in os.environ for v in _LAUNCHER_RANK_VARS):
+    if not any(v in os.environ for v in _MPI_RANK_VARS):
         return None
+    size = _int_env(_MPI_SIZE_VARS)
+    rank = _int_env(_MPI_RANK_VARS)
+    several = (size is not None and size > 1) or (rank is not None and rank > 0)
+    what = "{} processes".format(size) if size is not None else "process {}".format(rank)
     try:
         from mpi4py import MPI
     except ImportError:
-        sizes = [ int(os.environ[v]) for v in _LAUNCHER_SIZE_VARS if os.environ.get(v, "").isdigit() ]
-        if max(sizes, default=1) > 1:
+        if several:
             raise RuntimeError(
-                "started on {} MPI ranks, but mpi4py is not installed; install it with "
-                "pip install mpi4py (built against the MPI that mpirun belongs to), or "
-                "run on a single rank".format(max(sizes)))
+                "started by an MPI launcher as {}, but mpi4py is not installed; install "
+                "it with pip install mpi4py, built against the MPI of the launcher, or "
+                "run as a single process".format(what))
         return None
     comm = MPI.COMM_WORLD
+    if several and comm.Get_size() == 1:
+        raise RuntimeError(
+            "started by an MPI launcher as {}, but MPI sees this process as a run of "
+            "its own, so every process would compute everything and write the same "
+            "files; mpi4py and the launcher have to belong to the same MPI".format(what))
     return comm if comm.Get_size() > 1 else None
 
 

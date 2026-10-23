@@ -98,6 +98,11 @@ ranks when started under a launcher:
 pip install symWannier[mpi]        # mpi4py, built against the MPI of your mpirun
 mpirun -n 8 symwannier wannierize -s prefix
 ```
+Under a scheduler's launcher, give it the MPI plugin of the MPI that mpi4py is
+built against, for example ```srun --mpi=pmix```. Started without one, the
+processes know nothing of each other, symwannier cannot tell them from separate
+serial runs, and each of them computes everything and writes the same files.
+
 Each rank holds the overlap matrices of its own block of k-points only, which is
 where the memory goes, so the run can be spread over nodes for memory as well as
 for time. The results are those of a serial run up to the order in which the sums

@@ -59,27 +59,77 @@ def _run(code, env):
     return subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
 
 
-def _clean_env():
+def _clean_env(**extra):
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("OMPI_", "PMI_", "PMIX_", "MV2_", "SLURM_"))}
     env["PYTHONPATH"] = os.pathsep.join(sys.path)
+    env.update(extra)
     return env
+
+
+# mpi4py made unimportable, or replaced by one whose COMM_WORLD has the given size,
+# so that every branch runs without MPI
+_NO_MPI4PY = "import sys; sys.modules['mpi4py'] = None\n"
+_FAKE_MPI4PY = (
+    "import sys, types\n"
+    "MPI = types.ModuleType('mpi4py.MPI')\n"
+    "MPI.COMM_WORLD = type('Comm', (), {{'Get_size': lambda self: {size}}})()\n"
+    "pkg = types.ModuleType('mpi4py'); pkg.MPI = MPI\n"
+    "sys.modules['mpi4py'] = pkg; sys.modules['mpi4py.MPI'] = MPI\n")
+_CALL = ("from symwannier.kdist import world_comm\n"
+         "try:\n    c = world_comm()\n    print('comm', None if c is None else c.Get_size())\n"
+         "except RuntimeError as e:\n    print('raised', e)\n"
+         "print('imported' if sys.modules.get('mpi4py') not in (None,) else 'not imported')\n")
+
+
+def _world_comm(prelude, **env):
+    r = _run("import sys\n" + prelude + _CALL, _clean_env(**env))
+    assert r.returncode == 0, r.stderr
+    return r.stdout
 
 
 def test_world_comm_leaves_mpi_alone_outside_a_launcher():
     """A serial run must not import mpi4py, which would initialize MPI."""
-    r = _run("import sys; from symwannier.kdist import world_comm; "
-             "assert world_comm() is None; assert 'mpi4py' not in sys.modules", _clean_env())
-    assert r.returncode == 0, r.stderr
+    out = _world_comm("")
+    assert "comm None" in out and "not imported" in out
 
 
-def test_world_comm_refuses_several_ranks_without_mpi4py():
-    """Every rank would run the whole calculation and write the same files."""
-    env = _clean_env()
-    env.update(OMPI_COMM_WORLD_RANK="0", OMPI_COMM_WORLD_SIZE="4")
-    # make mpi4py unimportable, whether or not it is installed
-    r = _run("import sys; sys.modules['mpi4py'] = None\n"
-             "from symwannier.kdist import world_comm\n"
-             "try:\n    world_comm()\nexcept RuntimeError as e:\n    print(e)\n", env)
-    assert r.returncode == 0, r.stderr
-    assert "started on 4 MPI ranks, but mpi4py is not installed" in r.stdout
+def test_world_comm_ignores_the_scheduler():
+    """Only MPI's own variables count; a scheduler's describe the job, not the processes.
+
+    These are what a serial command in a Slurm batch script with --ntasks=4 sees, and
+    what srun sets without an MPI plugin. Neither starts an MPI process.
+    """
+    out = _world_comm("", SLURM_PROCID="0", SLURM_NTASKS="4", SLURM_STEP_NUM_TASKS="4")
+    assert "comm None" in out and "not imported" in out
+
+
+@pytest.mark.parametrize(
+    "env, expected",
+    [
+        (dict(OMPI_COMM_WORLD_RANK="0", OMPI_COMM_WORLD_SIZE="4"), "as 4 processes"),
+        (dict(PMI_RANK="0", PMI_SIZE="2"), "as 2 processes"),
+        (dict(PMIX_RANK="2"), "as process 2"),       # PMIx reports the rank only
+    ],
+)
+def test_world_comm_refuses_several_processes_without_mpi4py(env, expected):
+    """Every process would run the whole calculation and write the same files."""
+    out = _world_comm(_NO_MPI4PY, **env)
+    assert "raised started by an MPI launcher " + expected + ", but mpi4py is not installed" in out
+
+
+def test_world_comm_process_0_of_an_unknown_count_runs_serially_without_mpi4py():
+    """PMIx rank 0 cannot tell whether it is alone; the others refuse, so it writes alone."""
+    out = _world_comm(_NO_MPI4PY, PMIX_RANK="0")
+    assert "comm None" in out
+
+
+def test_world_comm_refuses_a_communicator_of_one_for_several_processes():
+    """MPI that does not belong to the launcher starts each process as a run of its own."""
+    out = _world_comm(_FAKE_MPI4PY.format(size=1), OMPI_COMM_WORLD_RANK="0", OMPI_COMM_WORLD_SIZE="4")
+    assert "raised started by an MPI launcher as 4 processes, but MPI sees this process as a run of its own" in out
+
+
+def test_world_comm_returns_the_communicator():
+    out = _world_comm(_FAKE_MPI4PY.format(size=4), OMPI_COMM_WORLD_RANK="0", OMPI_COMM_WORLD_SIZE="4")
+    assert "comm 4" in out
