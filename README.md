@@ -90,6 +90,16 @@ image far from the origin still localizes. wannier90 calls the same idea
 ```guiding_centres``` and has it off by default; here it is on unless the win file
 says ```guiding_centres = .false.```, which restores the principal branch.
 
+The spread is minimized by conjugate gradients with wannier90's parabolic line
+search, as wannier90 does. ```--minimizer lbfgs``` uses L-BFGS instead, which
+needs the fewest iterations, and ```--minimizer sd``` steepest descent, which is
+slow where the spread is badly conditioned. With ```-S``` every step is kept to
+rotations that respect the crystal symmetry. With ```-s```, as on full-BZ files and
+in wannier90, the minimization is unconstrained, and where the symmetric Wannier
+functions are a saddle point of the spread - the atom-centred s, p, d orbitals of
+bcc Fe are one - it can leave them for symmetry-broken orbitals of lower spread.
+Use ```-S``` to keep them.
+
 ### Running on several MPI ranks
 
 ```symwannier wannierize``` distributes the k-points of the full mesh over MPI

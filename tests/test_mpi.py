@@ -62,6 +62,8 @@ def _serial(material, cwd, **kw):
         ("diamond", 2, ["-S"], dict(lsite_sym=True)),                # site symmetry gathers Umat
         ("Ni_atom_proj", 2, ["-s", "-P"], dict(lsym=True, projectability_disentangle=True)),
         ("diamond", 4, [], dict()),                                  # plain full-BZ files
+        ("diamond", 3, ["-s", "--minimizer", "lbfgs"], dict(lsym=True, minimizer="lbfgs")),
+        ("diamond", 2, ["-s", "--minimizer", "cg"], dict(lsym=True, minimizer="cg")),
     ],
 )
 def test_mpi_matches_serial(tmp_path, copy_inputs, material, nproc, flags, kw):

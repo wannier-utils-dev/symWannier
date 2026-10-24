@@ -168,7 +168,10 @@ def _run_sb(copy_inputs, tmp_path, name, line=None):
     cwd = os.getcwd()
     try:
         os.chdir(work)
-        wann = Wannierize(prefix="Sb", lsym=True, log_level="ERROR")
+        # L-BFGS: the test compares with the converged value, which conjugate
+        # gradients, the default, approach to 2e-4 in the 200 iterations of the win
+        # file (13.155809, as wannier90 does) and reach in 374
+        wann = Wannierize(prefix="Sb", lsym=True, log_level="ERROR", minimizer="lbfgs")
         wann.run()
     finally:
         os.chdir(cwd)
@@ -182,19 +185,20 @@ def test_sb_projections_far_from_the_origin(tmp_path, copy_inputs):
     That is a correct crystallographic coordinate, but it is most of a lattice vector
     from the origin, and on this mesh the phase b.r reaches 0.87 pi. The principal
     branch wraps there, and the four Wannier functions on that site land in the wrong
-    cell: 40.6 A^2 each, 169.279 A^2 in total, which is what wannier90 gives for the
-    same input without guiding_centres. With the guide the same files give 13.437 A^2,
-    the value the equivalent image (-0.233,-0.233,-0.233) produces.
+    cell: 40.6 A^2 each, 169.133 A^2 in total, which is what wannier90 gives for the
+    same input without guiding_centres. With the guide the same files give 13.1556
+    A^2, as wannier90 does with guiding_centres = .true. (13.15564 after 500
+    iterations).
 
     Only the original structure is bundled. The periodic image is the other cure and
-    agrees with the guide digit for digit, but it is a different input file rather
-    than a different code path, so it would not test anything this does not.
+    agrees with the guide to 3e-8 in the total, but it is a different input file
+    rather than a different code path, so it would not test anything this does not.
     """
     guided = _run_sb(copy_inputs, tmp_path, "guided")
     principal = _run_sb(copy_inputs, tmp_path, "principal", "guiding_centres = .false.")
 
-    assert np.isclose(np.sum(guided.spreads), 13.43711993, rtol=1e-6)
-    assert np.isclose(np.sum(principal.spreads), 169.27892197, rtol=1e-6)
+    assert np.isclose(np.sum(guided.spreads), 13.15564759, rtol=1e-6)
+    assert np.isclose(np.sum(principal.spreads), 169.13310394, rtol=1e-6)
 
     # the eight functions are four on each of the two sites, so with the branch taken
     # consistently the spreads come in pairs

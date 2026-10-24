@@ -10,7 +10,6 @@
 
 import numpy as np
 import scipy.linalg
-import scipy.optimize
 import itertools
 import textwrap
 import datetime
@@ -27,6 +26,67 @@ from symwannier.eig import Eig
 from symwannier.nnkp import Nnkp
 from symwannier.timedata import TimeData
 from symwannier.kdist import KDist, world_comm
+
+class _TangentSymmetrizer:
+    """Projection of a tangent direction onto those that keep the rotations symmetric.
+
+    A direction d holds an anti-Hermitian num_wann x num_wann matrix per k-point,
+    in the local frame of Umat(k): the rotations move to Umat(k) exp(a d(k)). The
+    full-BZ states are defined as the images of the irreducible ones with the band
+    index untouched, and Umat as the irreducible rotations times the projector
+    rotation W(g,k) = Rmat[g] diag(exp(-2 pi i k.Rshift[g])) (Amn.symmetrize_expand).
+    Keeping that relation through the step needs
+
+        d(gk) = W(g,k)^dagger d(k) W(g,k)        (conjugated when g is antiunitary)
+
+    across a star and the same with d(k) on both sides within the little group
+    G_k. The projection takes every direction of a star back to its irreducible
+    point, averages the star and then G_k, and maps the result out again. It is
+    orthogonal in <A,B> = sum_k Re Tr(A_k^dagger B_k), so a projected descent
+    direction stays a descent direction.
+    """
+
+    def __init__(self, sym, amn, kd):
+        Rmat, Rshift, _ = amn.projection_sym_mat()
+
+        def rot(isym, k):
+            return Rmat[isym] * np.exp(-2j*np.pi * np.einsum("a,na->n", k, Rshift[isym]))[None, :]
+
+        self.kd = kd
+        self.nks = sym.nks
+        ks = range(kd.k0, kd.k1)
+        self.iks = sym.equiv[kd.k0:kd.k1]
+        self.trev = np.array([sym.t_rev[sym.equiv_sym[k]] == 1 for k in ks], dtype=bool)
+        self.W = np.array([rot(sym.equiv_sym[k], sym.irr_kpoints[sym.equiv[k]]) for k in ks])
+        self.count = np.bincount(sym.equiv, minlength=sym.nks).astype(float)
+        # every (irreducible k-point, little-group operation) pair, flat, since the
+        # little groups differ in size and most k-points have a small one
+        pairs = [ (i, h) for i in range(sym.nks) for h in sym.little_group(i) ]
+        self.pair_k = np.array([ i for i, _ in pairs ], dtype=int)
+        self.pair_W = np.array([ rot(h, sym.irr_kpoints[i]) for i, h in pairs ])
+        self.pair_trev = np.array([ sym.t_rev[h] == 1 for _, h in pairs ], dtype=bool)
+        self.order = np.bincount(self.pair_k, minlength=sym.nks).astype(float)
+
+    @staticmethod
+    def _forward(W, X, trev):
+        """W^dagger X W, conjugated where trev"""
+        Y = np.einsum("kml,kmn,knj->klj", np.conj(W), X, W, optimize=True)
+        return np.where(trev[:, None, None], np.conj(Y), Y)
+
+    def __call__(self, d):
+        # back to the irreducible point, and the average over the star
+        dc = np.where(self.trev[:, None, None], np.conj(d), d)
+        back = np.einsum("kml,kln,kjn->kmj", self.W, dc, np.conj(self.W), optimize=True)
+        irr = np.zeros((self.nks,) + d.shape[1:], dtype=complex)
+        np.add.at(irr, self.iks, back)
+        irr = self.kd.sum(irr) / self.count[:, None, None]
+        # the average over the little group
+        avg = np.zeros_like(irr)
+        np.add.at(avg, self.pair_k, self._forward(self.pair_W, irr[self.pair_k], self.pair_trev))
+        avg /= self.order[:, None, None]
+        # out to the star
+        return self._forward(self.W, avg[self.iks], self.trev)
+
 
 class Wannierize:
     """Compute maximally localized (and symmetry-adapted) Wannier functions.
@@ -50,6 +110,11 @@ class Wannierize:
         Logging level (e.g., logging.DEBUG, logging.INFO, or 'DEBUG', 'INFO').
     log : logging.Logger, optional
         Logger to use; if not provided a module logger is created.
+    minimizer : {"cg", "sd", "lbfgs"}, optional
+        How the spread is minimized: conjugate gradients with wannier90's parabolic
+        line search, as wannier90 does (default), steepest descent with the same
+        line search, or L-BFGS, which needs the fewest iterations and can reach
+        lower minima than wannier90 does. See update_mmn.
     comm : mpi4py communicator, optional
         Distribute the k-points of the full mesh over the ranks of comm. Mmn and
         everything derived from it, and the rotations Umat and Umat_opt, then hold
@@ -62,7 +127,7 @@ class Wannierize:
         for that rank in their next exchange for as long as the job runs.
     """
 
-    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, projectability_disentangle=False, log_level=None, log=None, snap_kp=True, comm=None):
+    def __init__(self, prefix, lsym=False, lsite_sym=False, prec=False, optimize_memory_usage=False, projectability_disentangle=False, log_level=None, log=None, snap_kp=True, comm=None, minimizer="cg"):
         self.log = log or logging.getLogger(__name__)
         if not self.log.handlers:
             # Determine log level
@@ -171,7 +236,14 @@ class Wannierize:
 
         self.disentangle = (self.num_bands > self.num_wann)
 
-        self.omega_thr = 1e-8    # threshold for wannierization
+        if minimizer not in ("sd", "cg", "lbfgs"):
+            raise ValueError("minimizer must be 'sd', 'cg' or 'lbfgs', not {!r}".format(minimizer))
+        self.minimizer = minimizer
+        # the minimization stops when the gradient, root mean square over the
+        # k-points of dOmega/dW(k) (A^2 per radian), falls below this
+        self.grad_thr = 1e-4
+        self.lbfgs_memory = 10   # steps the L-BFGS minimization remembers
+        self.num_cg_steps = 5    # conjugate steps between restarts, wannier90's default
         self.womega_thr = 1e-10  # threshold for disentanglement
 
     def run(self):
@@ -206,22 +278,24 @@ class Wannierize:
         print("! Initial:  omega_tot = {:15.8f}    time: {:12.6f}".format(omega, self.time.get_time()))
         self.show_spreads()
         converged = False
+        self._reset_minimizer()
         self.time.start_clock("wannierization")
         for i in range(self.win.num_iter):
             self.log.debug(f"Wannierization iteration {i+1}/{self.win.num_iter}")
             omega_prev = omega
             dw = self.calc_dw()
             omega = self.update_mmn(dw, omega)
-            self.log.debug(f"Iteration {i+1}: omega_tot = {omega:.8f}, delta_omega = {abs(omega - omega_prev):.2e}")
+            if self._converged:
+                self.log.debug("Wannierization converged")
+                print("  convergence has been achieved (gradient {:.2e} A^2)".format(self.grad_norm))
+                break
+            if self._stalled:
+                print("  no step lowers the spread any more (gradient {:.2e} A^2); stopping".format(self.grad_norm))
+                break
+            self.log.debug(f"Iteration {i+1}: omega_tot = {omega:.8f}, delta_omega = {abs(omega - omega_prev):.2e}, gradient = {self.grad_norm:.2e}")
             print("! {:5d}-th  omega_tot = {:15.8f}    time: {:12.6f}".format(i+1, omega, self.time.get_time()))
             self.show_spreads()
             self.calc_omega_detail(self.mmn)
-
-            converged = np.abs(omega - omega_prev) < self.omega_thr
-            if converged:
-                self.log.debug("Wannierization converged")
-                print("  convergence has been achieved")
-                break
         self.time.stop_clock("wannierization")
         print("! Final:    omega_tot = {:15.8f}    time: {:12.6f}".format(omega, self.time.get_time()))
 
@@ -498,54 +572,203 @@ class Wannierize:
         expdw = np.einsum("kab,kb,kcb->kac", v, exp_e, np.conj(v), optimize=True)
         return expdw
 
+    def _ip(self, a, b):
+        """<A,B> = sum_k Re Tr(A_k^dagger B_k), over the whole mesh."""
+        return self.kd.sum(np.sum(np.real(np.conj(a) * b)))
+
+    def _reset_minimizer(self):
+        """Forget the L-BFGS history, at the start of the minimization."""
+        self._lbfgs_s, self._lbfgs_y = [], []
+        self._lbfgs_last = None          # (step, gradient) of the previous iteration
+        self._trial_step = 1.0          # trial step of the parabolic line search
+        self._converged = False          # the gradient fell below grad_thr
+        self._stalled = False            # no step along the direction lowered Omega
+        self.grad_norm = None            # rms over the k-points of dOmega/dW(k)
+        self._cg_dir = None              # conjugate gradients: previous direction,
+        self._cg_gg = None               # |gradient|^2 there,
+        self._cg_count = 0               # and conjugate steps since the last restart
+        if self.lsite_sym and not hasattr(self, "_tangent_symmetrizer"):
+            self._tangent_symmetrizer = _TangentSymmetrizer(self.sym, self.amn, self.kd)
+
+    def _symmetrize_tangent(self, d):
+        """The direction kept to symmetric rotations for symmetry-adapted Wannier
+        functions (-S); unchanged otherwise, -s included, where symmetry serves
+        only to build the inputs."""
+        if not self.lsite_sym:
+            return d
+        return self._tangent_symmetrizer(d)
+
+    def _omega_along(self, d, a):
+        """Omega at Umat exp(a d), with the rotations and overlaps it is evaluated at."""
+        umat = np.einsum("kmn, knl->kml", self.Umat, self.calc_expdw(a * d), optimize=True)
+        mmn = self.update_Mmn_by_Umat(self.mmn1, umat)
+        return self.calc_omega(mmn), umat, mmn
+
+    def _parabolic_step(self, d, omega, slope):
+        """wannier90's line search: Omega at a trial step, then the minimum of the
+        parabola through Omega(0), its slope and that value. Returns
+        (omega, umat, mmn, step) of the best point found, or None."""
+        a_t = self._trial_step
+        om_t, u_t, m_t = self._omega_along(d, a_t)
+        curv = 2 * (om_t - omega - slope * a_t) / a_t**2
+        if curv > 0:
+            a = -slope / curv
+            om, u, m = self._omega_along(d, a)
+            if om < min(omega, om_t):
+                self._trial_step = a
+                return om, u, m, a
+        if om_t < omega:
+            return om_t, u_t, m_t, a_t
+        a = a_t
+        for _ in range(30):
+            a *= 0.5
+            om, u, m = self._omega_along(d, a)
+            if om < omega:
+                self._trial_step = a
+                return om, u, m, a
+        return None
+
+    def _armijo_step(self, d, omega, slope):
+        """Quasi-Newton step 1, backtracking along a parabola until Omega falls
+        enough. Returns (omega, umat, mmn, step), or None."""
+        a = 1.0
+        while a > 1e-6:
+            om, u, m = self._omega_along(d, a)
+            if om <= omega + 1e-4 * a * slope:
+                return om, u, m, a
+            a = max(0.1 * a, min(0.5 * a, -slope * a * a / (2 * (om - omega - slope * a))))
+        return None
+
+    def _lbfgs_step(self, g, omega):
+        """L-BFGS: the direction from the last lbfgs_memory steps and gradients by
+        the two-loop recursion, the quasi-Newton step 1 with Armijo backtracking,
+        and wannier90's parabola on the first step and after a restart.
+        Returns (direction, step found or None)."""
+        if self._lbfgs_last is not None:
+            s_prev, g_prev = self._lbfgs_last
+            y = g - g_prev
+            sy = self._ip(s_prev, y)
+            if sy > 1e-12 * np.sqrt(self._ip(s_prev, s_prev) * self._ip(y, y)):
+                self._lbfgs_s.append(s_prev)
+                self._lbfgs_y.append(y)
+                if len(self._lbfgs_s) > self.lbfgs_memory:
+                    self._lbfgs_s.pop(0)
+                    self._lbfgs_y.pop(0)
+
+        # two-loop recursion
+        q = g.copy()
+        history = []
+        for s_i, y_i in zip(reversed(self._lbfgs_s), reversed(self._lbfgs_y)):
+            rho = 1 / self._ip(y_i, s_i)
+            a_i = rho * self._ip(s_i, q)
+            q -= a_i * y_i
+            history.append((rho, a_i, s_i, y_i))
+        if self._lbfgs_s:
+            q *= self._ip(self._lbfgs_s[-1], self._lbfgs_y[-1]) / self._ip(self._lbfgs_y[-1], self._lbfgs_y[-1])
+        for rho, a_i, s_i, y_i in reversed(history):
+            q += (a_i - rho * self._ip(y_i, q)) * s_i
+        d = self._symmetrize_tangent(-q)
+        slope = self._ip(g, d)
+        if slope >= 0:
+            # the history no longer gives a descent direction
+            self._lbfgs_s, self._lbfgs_y = [], []
+            d = -g
+            slope = self._ip(g, d)
+        if slope == 0:
+            return d, None
+
+        step = self._armijo_step(d, omega, slope) if self._lbfgs_s else None
+        if step is None:
+            if self._lbfgs_s:
+                self.log.debug("update_mmn: quasi-Newton step failed, dropping the history")
+                self._lbfgs_s, self._lbfgs_y = [], []
+                d = -g
+                slope = self._ip(g, d)
+            step = self._parabolic_step(d, omega, slope)
+        return d, step
+
+    def _cg_step(self, g, omega):
+        """Conjugate gradients as wannier90 does them: Fletcher-Reeves, restarted
+        to steepest descent after num_cg_steps conjugate steps, when the
+        coefficient exceeds 3 and when the direction stops descending; the parabolic
+        line search. Returns (direction, step found or None)."""
+        gg = self._ip(g, g)
+        beta = 0.0
+        if self._cg_dir is not None and self._cg_count < self.num_cg_steps and self._cg_gg > 0:
+            beta = gg / self._cg_gg
+            if beta > 3:
+                beta = 0.0
+        d = -g if beta == 0 else self._symmetrize_tangent(-g + beta * self._cg_dir)
+        slope = self._ip(g, d)
+        if slope >= 0:
+            beta, d = 0.0, -g
+            slope = self._ip(g, d)
+        self._cg_count = 0 if beta == 0 else self._cg_count + 1
+        self._cg_dir, self._cg_gg = d, gg
+        if slope == 0:
+            return d, None
+        return d, self._parabolic_step(d, omega, slope)
+
     def update_mmn(self, dw, omega):
-        """Update unitary rotations and overlaps using line search for optimal step size.
-        
-        Uses Brent's method for robust 1D minimization to find optimal mixing parameter alpha.
-        Evaluates Omega(alpha) and finds the minimum with adaptive sampling.
-        
-        Parameters
-        ----------
-        dw : ndarray, shape (nk, num_wann, num_wann)
-            Gradient matrices dW(k).
-        omega : float
-            Current total spread (at alpha=0).
-        
-        Returns
-        -------
-        float
-            New total spread after optimal rotation.
+        """One step of the spread minimization.
+
+        dw is the descent direction at the current point, minus the gradient of
+        Omega in <A,B> = sum_k Re Tr(A_k^dagger B_k): along Umat exp(a d) the
+        slope at a = 0 is -<dw, d>. Two minimizers, chosen by self.minimizer:
+
+        "cg"     conjugate gradients, as wannier90 does them (Fletcher-Reeves,
+                 restarted every num_cg_steps), with wannier90's line search: Omega
+                 at a trial step, then the minimum of the parabola through Omega(0),
+                 its slope and that value; the trial step is the last step taken.
+                 The default.
+        "sd"     steepest descent along dw with the same line search; slow where
+                 the spread is badly conditioned.
+        "lbfgs"  L-BFGS, with the tangent vectors kept in the local frame of each
+                 Umat(k) as wannier90 keeps its conjugate-gradient directions. It
+                 needs far fewer iterations, and goes on to lower minima.
+
+        For symmetry-adapted Wannier functions (-S), the gradient and the
+        direction are projected onto the directions that keep the rotations
+        symmetric. The spread can have a symmetric stationary point that is not a
+        minimum - the atom-centred s, p, d orbitals of Fe are one - and a
+        minimizer that follows round-off out of it ends in symmetry-broken
+        orbitals, differently for every summation order. The projection keeps the
+        minimization on the symmetric solutions. With -s the minimization is
+        unconstrained, as in wannier90, and may leave such a point.
+
+        Convergence is decided here, before the step: when the gradient, root mean
+        square over the k-points of dOmega/dW(k), is below grad_thr, nothing moves
+        and self._converged is set; when no step along the direction lowers Omega,
+        self._stalled is.
+
+        Returns the new Omega; Umat, mmn and the centres and spreads are updated.
         """
-        self.log.debug("update_mmn: computing line search with Brent's method")
-        
-        # Define objective function for line search
-        def omega_at_alpha(alpha):
-            """Compute Omega for given alpha step size."""
-            expdw_alpha = self.calc_expdw(alpha * dw)
-            Umat_alpha = np.einsum("kmn, knl->kml", self.Umat, expdw_alpha, optimize=True)
-            mmn_alpha = self.update_Mmn_by_Umat(self.mmn1, Umat_alpha)
-            return self.calc_omega(mmn_alpha)
-        
-        # Use Brent's method for 1D minimization in range [0, 1]
-        # bracket=(0, 1) ensures search within [0, 1]
-        result = scipy.optimize.minimize_scalar(
-            omega_at_alpha,
-            bounds=(0.01, 1.0),
-            method='bounded',
-            options={'xatol': 1e-4}  # Tolerance for alpha convergence
-        )
-        
-        alpha = result.x
-        omega_new = result.fun
-        self.log.debug(f"update_mmn: optimal alpha={alpha:.4f}, omega={omega_new:.8f} (nfev={result.nfev})")
-        
-        # Update with optimal alpha
-        expdw_opt = self.calc_expdw(alpha * dw)
-        self.Umat = np.einsum("kmn, knl->kml", self.Umat, expdw_opt, optimize=True)
-        self.mmn = self.update_Mmn_by_Umat(self.mmn1, self.Umat)
-        omega = self.calc_omega(self.mmn)
-        
-        return omega
+        g = -self._symmetrize_tangent(dw)
+        # converged before stepping: the rms gradient per k-point, which unlike the
+        # norm of the whole array does not grow with the mesh (dw carries 1/N)
+        self.grad_norm = np.sqrt(self.nk * self._ip(g, g))
+        if self.grad_norm < self.grad_thr:
+            self._converged = True
+            return omega
+        if self.minimizer == "lbfgs":
+            d, step = self._lbfgs_step(g, omega)
+        elif self.minimizer == "cg":
+            d, step = self._cg_step(g, omega)
+        else:
+            d = -g
+            slope = self._ip(g, d)
+            step = self._parabolic_step(d, omega, slope) if slope < 0 else None
+        if step is None:
+            self.log.debug("update_mmn: no step lowers Omega")
+            self.calc_omega(self.mmn)
+            self._stalled = True
+            return omega
+        omega_new, self.Umat, self.mmn, a = step
+        self.log.debug(f"update_mmn ({self.minimizer}): step {a:.4g}, omega={omega_new:.8f}")
+        # the caches calc_dw and calc_omega_detail read must belong to the accepted point
+        omega_new = self.calc_omega(self.mmn)
+        self._lbfgs_last = (a * d, g)
+        return omega_new
 
     def dis_window(self):
         """Define energy windows for disentanglement."""
@@ -905,6 +1128,15 @@ def main(argv=None, for_cli=False):
     )
 
     parser.add_argument(
+        "--minimizer",
+        choices=["cg", "sd", "lbfgs"], default="cg",
+        help="Spread minimization: conjugate gradients with a parabolic line "
+             "search, as wannier90 (default), steepest descent with the same line "
+             "search, or L-BFGS, which needs the fewest iterations and can reach "
+             "lower minima than wannier90 does"
+    )
+
+    parser.add_argument(
         "prefix",
         help="Prefix name of input/output files"
     )
@@ -920,7 +1152,7 @@ def main(argv=None, for_cli=False):
         log_level = "ERROR"
 
     try:
-        wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, projectability_disentangle=args.projectability_disentangle, log_level=log_level, snap_kp=args.snap_kp, comm=comm)
+        wann = Wannierize(prefix=args.prefix, lsym=args.symmetry, lsite_sym=args.site_symmetry, prec=args.high_precision, optimize_memory_usage=args.optimize_memory_usage, projectability_disentangle=args.projectability_disentangle, log_level=log_level, snap_kp=args.snap_kp, comm=comm, minimizer=args.minimizer)
         wann.run()
     except Exception:
         if comm is None:
