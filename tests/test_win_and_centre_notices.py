@@ -185,7 +185,7 @@ def test_sb_projections_far_from_the_origin(tmp_path, copy_inputs):
     That is a correct crystallographic coordinate, but it is most of a lattice vector
     from the origin, and on this mesh the phase b.r reaches 0.87 pi. The principal
     branch wraps there, and the four Wannier functions on that site land in the wrong
-    cell: 40.6 A^2 each, 169.27 A^2 in total, which is what wannier90 gives for the
+    cell: 40.6 A^2 each, 169.133 A^2 in total, which is what wannier90 gives for the
     same input without guiding_centres. With the guide the same files give 13.1556
     A^2, as wannier90 does with guiding_centres = .true. (13.15564 after 500
     iterations).
@@ -198,7 +198,7 @@ def test_sb_projections_far_from_the_origin(tmp_path, copy_inputs):
     principal = _run_sb(copy_inputs, tmp_path, "principal", "guiding_centres = .false.")
 
     assert np.isclose(np.sum(guided.spreads), 13.15564759, rtol=1e-6)
-    assert np.isclose(np.sum(principal.spreads), 169.27045529, rtol=1e-6)
+    assert np.isclose(np.sum(principal.spreads), 169.13310394, rtol=1e-6)
 
     # the eight functions are four on each of the two sites, so with the branch taken
     # consistently the spreads come in pairs

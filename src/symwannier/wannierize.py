@@ -587,11 +587,14 @@ class Wannierize:
         self._cg_dir = None              # conjugate gradients: previous direction,
         self._cg_gg = None               # |gradient|^2 there,
         self._cg_count = 0               # and conjugate steps since the last restart
-        if self.sym is not None and not hasattr(self, "_tangent_symmetrizer"):
+        if self.lsite_sym and not hasattr(self, "_tangent_symmetrizer"):
             self._tangent_symmetrizer = _TangentSymmetrizer(self.sym, self.amn, self.kd)
 
     def _symmetrize_tangent(self, d):
-        if self.sym is None:
+        """The direction kept to symmetric rotations for symmetry-adapted Wannier
+        functions (-S); unchanged otherwise, -s included, where symmetry serves
+        only to build the inputs."""
+        if not self.lsite_sym:
             return d
         return self._tangent_symmetrizer(d)
 
@@ -724,12 +727,14 @@ class Wannierize:
                  Umat(k) as wannier90 keeps its conjugate-gradient directions. It
                  needs far fewer iterations, and goes on to lower minima.
 
-        With symmetry, the gradient and the direction are projected onto the
-        directions that keep the rotations symmetric. The spread can have a
-        symmetric stationary point that is not a minimum - the atom-centred s, p, d
-        orbitals of Fe are one - and a minimizer that follows round-off out of it
-        ends in symmetry-broken orbitals, differently for every summation order.
-        The projection keeps the minimization on the symmetric solutions.
+        For symmetry-adapted Wannier functions (-S), the gradient and the
+        direction are projected onto the directions that keep the rotations
+        symmetric. The spread can have a symmetric stationary point that is not a
+        minimum - the atom-centred s, p, d orbitals of Fe are one - and a
+        minimizer that follows round-off out of it ends in symmetry-broken
+        orbitals, differently for every summation order. The projection keeps the
+        minimization on the symmetric solutions. With -s the minimization is
+        unconstrained, as in wannier90, and may leave such a point.
 
         Convergence is decided here, before the step: when the gradient, root mean
         square over the k-points of dOmega/dW(k), is below grad_thr, nothing moves

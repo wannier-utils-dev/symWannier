@@ -51,7 +51,7 @@ def test_slope_along_the_descent_direction(tmp_path, copy_inputs):
 @pytest.mark.parametrize("material", ["diamond", "GaAs"])
 def test_tangent_symmetrizer_is_an_orthogonal_projection(tmp_path, copy_inputs, material):
     """Idempotent and self-adjoint, so a projected descent direction stays one."""
-    wann = _ready(material, tmp_path, copy_inputs)
+    wann = _ready(material, tmp_path, copy_inputs, lsite_sym=True)
     shape = wann.Umat.shape[:1] + (wann.num_wann, wann.num_wann)
     a, b = _random_tangent(shape, 0), _random_tangent(shape, 1)
     P = wann._symmetrize_tangent
@@ -69,7 +69,7 @@ def test_tangent_symmetrizer_is_an_orthogonal_projection(tmp_path, copy_inputs, 
 def test_gradient_at_a_symmetric_point_is_symmetric(tmp_path, copy_inputs, material):
     """The gradient at symmetric rotations is itself symmetric, which the
     projection must leave alone; a wrong transformation rule would not."""
-    wann = _ready(material, tmp_path, copy_inputs)
+    wann = _ready(material, tmp_path, copy_inputs, lsite_sym=True)
     wann.calc_omega(wann.mmn)
     dw = wann.calc_dw()
     p = wann._symmetrize_tangent(dw)
@@ -103,3 +103,12 @@ def test_default_minimizer_and_a_wrong_one(tmp_path, copy_inputs):
     other.mkdir()
     with pytest.raises(ValueError, match="minimizer must be 'sd', 'cg' or 'lbfgs'"):
         _ready("diamond", other, copy_inputs, minimizer="newton")
+
+
+def test_only_site_symmetry_constrains_the_directions(tmp_path, copy_inputs):
+    """-s builds the inputs from symmetry but leaves the Wannier functions free;
+    the directions are restricted only for symmetry-adapted ones (-S)."""
+    wann = _ready("GaAs", tmp_path, copy_inputs)
+    assert not wann.lsite_sym
+    d = _random_tangent(wann.Umat.shape[:1] + (wann.num_wann, wann.num_wann), 2)
+    assert wann._symmetrize_tangent(d) is d
