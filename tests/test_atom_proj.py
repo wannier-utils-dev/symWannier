@@ -14,7 +14,7 @@ import pytest
     ),
     [
         ("Fe_atom_proj", 50, 18, 13, 16, True, 14.94006918),
-        ("Ni_atom_proj", 25, 9, 8, 96, False, 6.73101300),
+        ("Ni_atom_proj", 25, 9, 8, 96, False, 6.73095099),
     ],
 )
 def test_atom_proj_ibz_wannierize(
@@ -49,6 +49,19 @@ def test_atom_proj_ibz_wannierize(
         rtol=1e-7,
         atol=2e-6,
     )
+
+
+def test_site_symmetry_keeps_umat_unitary(run_wannier):
+    """The G_k average does not preserve unitarity, so -S has to restore it.
+
+    Ni_atom_proj has a multiplet cut by num_bands at k = (0,0,1/4), where the
+    average is not a projector and shrinks U by ~1e-4. H(k) = U^dagger diag(e) U
+    is written from the final U, so a non-unitary one ends up in hr.dat.
+    """
+    wann, _ = run_wannier("Ni_atom_proj", lsite_sym=True)
+
+    utu = np.matmul(np.conj(wann.Umat).swapaxes(1, 2), wann.Umat)
+    assert np.max(np.abs(utu - np.eye(wann.num_wann))) < 1e-10
 
 
 def test_fe_atom_proj_ibz_projectability(run_wannier):

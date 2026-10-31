@@ -31,6 +31,7 @@ def run_wannier(copy_inputs, tmp_path):
     def _run(
         material: str,
         lsym: bool = True,
+        lsite_sym: bool = False,
         num_iter=None,
         projectability_disentangle: bool = False,
     ):
@@ -41,6 +42,7 @@ def run_wannier(copy_inputs, tmp_path):
             wann = Wannierize(
                 prefix=material,
                 lsym=lsym,
+                lsite_sym=lsite_sym,
                 projectability_disentangle=projectability_disentangle,
             )
             if num_iter is not None:
